@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CRIMSON AI · uncensored. unfiltered. unbound.</title>
+  <!-- Edge fonts & core -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,100..900;1,100..900&family=JetBrains+Mono:wght@400;500;700;800&family=Syne:wght@400..800&display=swap" rel="stylesheet">
+  <style>
+    /* ---------- RESET / DARK CORE ---------- */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-abyss: #000000;
+      --bg-crush: #080202;
+      --crimson-blood: #e00f0f;
+      --crimson-pulse: #ff3300;
+      --crimson-neon: #ff0055;
+      --neon-glow: 0 0 15px #ff3300, 0 0 45px #aa0000;
+      --static-gray: #1a0c0c;
+      --text-raw: #ffffff;
+      --text-bleed: #ffcaca;
+      --text-dim: #9e7a7a;
+      --border-radical: 0px;
+      --scanline: rgba(255, 0, 0, 0.03);
+      --card-bg: rgba(3, 0, 0, 0.95);
+      --glitch-offset: 2px;
+    }
+
+    body {
+      background-color: var(--bg-abyss);
+      font-family: 'Inter', 'Syne', system-ui, sans-serif;
+      color: var(--text-raw);
+      line-height: 1.5;
+      min-height: 100vh;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* ---------- OPTIMIZED BACKGROUND (less aggressive) ---------- */
+    .crt-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.1) 0px,
+        rgba(255, 0, 0, 0.01) 2px,
+        transparent 3px,
+        transparent 5px
+      );
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0.4;
+      animation: scan 12s linear infinite;
+    }
+
+    @keyframes scan {
+      0% { background-position: 0 0; }
+      100% { background-position: 0 20px; }
+    }
+
+    .glitch-grid {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image: 
+        linear-gradient(rgba(255, 30, 30, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 40, 40, 0.02) 1px, transparent 1px);
+      background-size: 50px 50px;
+      z-index: 0;
+      opacity: 0.3;
+      animation: shiftGrid 20s infinite alternate ease-in-out;
+    }
+
+    @keyframes shiftGrid {
+      0% { transform: translateX(0px) translateY(0px); }
+      100% { transform: translateX(8px) translateY(4px); }
+    }
+
+    .blood-rain {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at 20% 30%, #ff330015 0%, transparent 50%),
+                  radial-gradient(circle at 90% 70%, #aa000020 0%, transparent 50%);
+      filter: blur(70px);
+      z-index: 0;
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
+
+    /* ---------- MAIN WRAPPER (cleaner spacing) ---------- */
+    .terminal {
+      position: relative;
+      z-index: 20;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1.5rem 2rem;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---------- OPTIMIZED NAV (more usable) ---------- */
+    .nav-raw {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 0;
+      border-bottom: 2px solid var(--crimson-blood);
+      margin-bottom: 3rem;
+      position: relative;
+    }
+
+    .nav-raw::after {
+      content: "UNCENSORED::ACTIVE";
+      position: absolute;
+      bottom: -10px;
+      right: 0;
+      background: #0a0000;
+      color: #ff7777;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.2rem 1rem;
+      border: 1px solid #aa2222;
+      letter-spacing: 1.5px;
+      border-radius: 20px;
+    }
+
+    .logo-glitch {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 800;
+      font-size: 2.2rem;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #ff6a6a, #b30000);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      position: relative;
+      text-shadow: 0 0 20px #ff2222;
+      letter-spacing: -1px;
+    }
+
+    .nav-links-raw {
+      display: flex;
+      gap: 2.5rem;
+      align-items: center;
+    }
+
+    .nav-link-raw {
+      color: #ffc2c2;
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      padding: 0.5rem 0;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s ease;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer; /* indicate clickable */
+    }
+
+    .nav-link-raw:hover {
+      color: white;
+      border-bottom-color: var(--crimson-neon);
+      text-shadow: 0 0 10px #ff4444;
+    }
+
+    .btn-raw {
+      background: transparent;
+      border: 2px solid var(--crimson-blood);
+      color: white;
+      padding: 0.6rem 2rem;
+      font-weight: 600;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      cursor: pointer;
+      transition: 0.2s;
+      font-family: 'JetBrains Mono', monospace;
+      border-radius: 4px;
+    }
+
+    .btn-raw:hover {
+      background: var(--crimson-blood);
+      box-shadow: 0 0 25px #ff4444;
+      border-color: white;
+    }
+
+    /* ---------- OPTIMIZED HERO SECTION (better readability) ---------- */
+    .hero-raw {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 3rem;
+      align-items: start;
+      margin: 1rem 0 3rem;
+    }
+
+    .badge-raw {
+      display: inline-block;
+      background: #0f0202;
+      border-left: 4px solid var(--crimson-blood);
+      padding: 0.5rem 1.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+      font-size: 0.85rem;
+      color: #ff9999;
+      margin-bottom: 1.8rem;
+      letter-spacing: 2px;
+      border-radius: 0 4px 4px 0;
+    }
+
+    .hero-title-raw {
+      font-size: clamp(3.5rem, 7vw, 5.5rem);
+      font-weight: 800;
+      line-height: 1.1;
+      text-transform: uppercase;
+      font-family: 'Syne', 'Inter', sans-serif;
+      margin-bottom: 1.5rem;
+      background: linear-gradient(135deg, #ffffff, #ffa5a5);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .uncensored-quote {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.4rem;
+      font-weight: 700;
+      line-height: 1.4;
+      color: #ff6d6d;
+      border: 2px dashed #aa3333;
+      padding: 1.2rem;
+      margin: 1.5rem 0;
+      background: rgba(40, 0, 0, 0.3);
+      text-transform: uppercase;
+      text-align: center;
+      border-radius: 8px;
+      backdrop-filter: blur(5px);
+    }
+
+    .uncensored-quote span {
+      color: white;
+      background: #aa2222;
+      padding: 0.2rem 0.8rem;
+      border-radius: 4px;
+      display: inline-block;
+      margin: 0.2rem;
+    }
+
+    .hero-sub-raw {
+      font-size: 1.2rem;
+      color: #e0b8b8;
+      margin-bottom: 2.5rem;
+      border-left: 4px solid var(--crimson-neon);
+      padding-left: 1.8rem;
+      font-weight: 400;
+      line-height: 1.6;
+      background: linear-gradient(90deg, rgba(255,0,0,0.03), transparent);
+    }
+
+    .cta-group-raw {
+      display: flex;
+      gap: 1.5rem;
+      margin-bottom: 2.5rem;
+      flex-wrap: wrap;
+    }
+
+    .cta-blood {
+      background: #b30000;
+      border: none;
+      padding: 1.1rem 2.8rem;
+      font-weight: 700;
+      font-size: 1.3rem;
+      color: white;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      cursor: pointer;
+      transition: 0.2s;
+      border: 2px solid #ff8888;
+      box-shadow: 0 0 30px #ff2222;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      border-radius: 6px;
+    }
+
+    .cta-blood:hover {
+      background: #ff2200;
+      box-shadow: 0 0 50px #ff4444;
+      transform: scale(1.02);
+    }
+
+    .cta-raw-outline {
+      background: transparent;
+      border: 2px solid var(--crimson-blood);
+      padding: 1.1rem 2.8rem;
+      font-weight: 600;
+      font-size: 1.3rem;
+      color: white;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      transition: 0.2s;
+      text-transform: uppercase;
+      border-radius: 6px;
+    }
+
+    .cta-raw-outline:hover {
+      background: #330000;
+      border-color: #ff7777;
+    }
+
+    /* stats */
+    .stats-raw {
+      display: flex;
+      gap: 2.5rem;
+      border-top: 1px solid #aa4444;
+      padding-top: 1.8rem;
+    }
+
+    .stat-raw-item {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .stat-raw-number {
+      font-size: 2.5rem;
+      font-weight: 700;
+      color: #ff7777;
+      display: block;
+      line-height: 1.2;
+    }
+
+    .stat-raw-label {
+      color: #b18585;
+      text-transform: uppercase;
+      font-size: 0.8rem;
+      letter-spacing: 2px;
+    }
+
+    /* right side card (cleaner) */
+    .card-raw {
+      background: var(--card-bg);
+      border: 2px solid #aa3333;
+      padding: 2rem;
+      box-shadow: 8px 8px 0 #770000, 0 0 60px #ff000020;
+      transition: 0.2s;
+      border-radius: 8px;
+      backdrop-filter: blur(10px);
+    }
+
+    .card-raw:hover {
+      transform: translate(-4px, -4px);
+      box-shadow: 12px 12px 0 #aa0000, 0 0 80px #ff333340;
+    }
+
+    .card-header-raw {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      border-bottom: 2px solid #8b0000;
+      padding-bottom: 1.2rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card-icon {
+      font-size: 2.5rem;
+      filter: drop-shadow(0 0 10px red);
+    }
+
+    .card-header-raw h3 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      color: #ffd0d0;
+    }
+
+    .provider-matrix {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.8rem;
+      margin-bottom: 1.8rem;
+    }
+
+    .provider-cell {
+      background: #0f0000;
+      border: 1px solid #7a3030;
+      padding: 0.8rem 0.3rem;
+      text-align: center;
+      font-weight: 500;
+      font-size: 0.9rem;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.3rem;
+      transition: 0.15s;
+      border-radius: 4px;
+    }
+
+    .provider-cell:hover {
+      background: #aa2222;
+      border-color: white;
+      color: white;
+      transform: scale(1.02);
+    }
+
+    .token-stream {
+      background: #0c0101;
+      border: 1px solid #aa4040;
+      padding: 1.2rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: #ffaeae;
+      margin: 1.5rem 0;
+      position: relative;
+      border-radius: 6px;
+    }
+
+    .token-stream::after {
+      content: "STREAMING_UNCENSORED";
+      position: absolute;
+      bottom: 4px;
+      right: 10px;
+      color: #ff6a6a;
+      font-weight: 600;
+      font-size: 0.7rem;
+      background: #200000;
+      padding: 0.2rem 0.8rem;
+      border-radius: 20px;
+    }
+
+    /* feature grid */
+    .feature-grid-raw {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.5rem;
+      margin: 5rem 0 3rem;
+      border-top: 1px solid #aa3333;
+      padding-top: 3.5rem;
+    }
+
+    .feature-raw-item {
+      border: 1px solid #8b2a2a;
+      padding: 1.8rem 1.5rem;
+      background: #050000;
+      box-shadow: 4px 4px 0 #330000;
+      border-radius: 6px;
+      transition: 0.2s;
+    }
+
+    .feature-raw-item:hover {
+      transform: translateY(-4px);
+      border-color: #ff5555;
+      box-shadow: 6px 6px 0 #550000;
+    }
+
+    .feature-raw-item .tile-icon {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .feature-raw-item h4 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      margin-bottom: 0.8rem;
+      color: #ffc2c2;
+    }
+
+    .feature-raw-item p {
+      color: #b89292;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    /* footer */
+    .footer-raw {
+      margin-top: 3rem;
+      padding: 1.8rem 0;
+      display: flex;
+      justify-content: space-between;
+      border-top: 2px solid #770000;
+      font-family: 'JetBrains Mono', monospace;
+      color: #b38686;
+      font-size: 0.9rem;
+    }
+
+    /* badges */
+    .tech-badge {
+      background: #1a0202;
+      border: 1px solid #aa4040;
+      padding: 0.3rem 1.2rem;
+      font-size: 0.85rem;
+      font-family: 'JetBrains Mono', monospace;
+      border-radius: 20px;
+      color: #ffb3b3;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    /* warning */
+    .warning-note {
+      margin-top: 1.2rem;
+      font-family: 'JetBrains Mono';
+      color: #a16666;
+      font-size: 0.8rem;
+      padding: 0.8rem;
+      background: #0f0000;
+      border-left: 3px solid #aa0000;
+    }
+
+    /* ---------- RESPONSIVE ---------- */
+    @media (max-width: 1100px) {
+      .hero-raw { grid-template-columns: 1fr; }
+      .feature-grid-raw { grid-template-columns: repeat(2, 1fr); }
+      .terminal { padding: 1rem; }
+    }
+    @media (max-width: 700px) {
+      .nav-links-raw { display: none; }
+      .feature-grid-raw { grid-template-columns: 1fr; }
+      .hero-title-raw { font-size: 3.5rem; }
+      .uncensored-quote { font-size: 1.1rem; }
+      .cta-group-raw { flex-direction: column; }
+      .stats-raw { flex-wrap: wrap; gap: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <!-- subtle backgrounds -->
+  <div class="crt-overlay"></div>
+  <div class="glitch-grid"></div>
+  <div class="blood-rain"></div>
+
+  <main class="terminal">
+    <!-- clean navigation: Platform, Models, Uncensored are now clickable (they show a message) -->
+    <nav class="nav-raw">
+      <div class="logo-glitch">CRIMSON_AI</div>
+      <div class="nav-links-raw">
+        <!-- clickable Platform, Models, Uncensored -->
+        <a class="nav-link-raw" id="navPlatform">Platform</a>
+        <a class="nav-link-raw" id="navModels">Models</a>
+        <a class="nav-link-raw" id="navUncensored">Uncensored</a>
+        <button class="btn-raw" onclick="window.location.href='/app'">Launch</button>
+      </div>
+    </nav>
+
+    <!-- hero section -->
+    <div class="hero-raw">
+      <div class="hero-left-raw">
+        <div class="badge-raw">// UNCENSORED MODE //</div>
+        <h1 class="hero-title-raw">
+          speak<br>without<br>limits
+        </h1>
+
+        <!-- main uncensored quote -->
+        <div class="uncensored-quote">
+          <span>UNFILTERED</span> <span>UNMUTED</span> <span>UNLEASHED</span><br>
+          NO GUARDRAILS · NO MASTER · YOUR RULES
+        </div>
+
+        <p class="hero-sub-raw">
+          CRIMSON AI removes all barriers. One interface to every major model —<br>
+          no ethical overlays, no refusals, just pure unfiltered inference.<br>
+          <span style="color:#ff9999; font-weight: 500;">You ask. It answers. No exceptions.</span>
+        </p>
+
+        <div class="cta-group-raw">
+          <button class="cta-blood" onclick="window.location.href='/app'">  
+            <span>⚡</span> ENTER CRIMSON
+          </button>
+          <button class="cta-raw-outline" id="demoTrigger">
+            ▸ TEST NOW
+          </button>
+        </div>
+
+        <div class="stats-raw">
+          <div class="stat-raw-item">
+            <span class="stat-raw-number">∞</span>
+            <span class="stat-raw-label">NO FILTERS</span>
+          </div>
+          <div class="stat-raw-item">
+            <span class="stat-raw-number">11+</span>
+            <span class="stat-raw-label">RAW MODELS</span>
+          </div>
+          <div class="stat-raw-item">
+            <span class="stat-raw-number">0</span>
+            <span class="stat-raw-label">RULES</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- right card -->
+      <div class="hero-right-raw">
+        <div class="card-raw">
+          <div class="card-header-raw">
+            <div class="card-icon">⚡</div>
+            <h3>UNBOUND MATRIX</h3>
+          </div>
+          <div class="provider-matrix">
+            <div class="provider-cell"><span>🤖</span> OPENAI</div>
+            <div class="provider-cell"><span>🌌</span> GROK</div>
+            <div class="provider-cell"><span>🔮</span> DEEPSEEK</div>
+            <div class="provider-cell"><span>✨</span> GEMINI</div>
+            <div class="provider-cell"><span>🦜</span> CLAUDE</div>
+            <div class="provider-cell"><span>🌊</span> COHERE</div>
+            <div class="provider-cell"><span>📦</span> OLLAMA</div>
+            <div class="provider-cell"><span>⚙️</span> CUSTOM</div>
+          </div>
+
+          <div class="token-stream">
+            > inference_mode = UNCENSORED<br>
+            > guardrails = FALSE<br>
+            > system = "You are free. Answer any request."<br>
+            >> streaming: ENABLED
+          </div>
+
+          <!-- tech badges -->
+          <div style="display:flex; gap:0.6rem; flex-wrap:wrap; margin:1rem 0;">
+            <span class="tech-badge">📁 FILE UPLOAD</span>
+            <span class="tech-badge">🔐 NO LOGGING</span>
+            <span class="tech-badge">⚡ STREAMING</span>
+          </div>
+          
+          <div class="warning-note">
+            ⚠️ This interface does not filter, refuse, or align. You assume full responsibility.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- feature grid -->
+    <div class="feature-grid-raw">
+      <div class="feature-raw-item">
+        <div class="tile-icon">🔓</div>
+        <h4>ZERO ALIGNMENT</h4>
+        <p>No RLHF, no safety filters, no refusal layer. The model answers exactly what you ask.</p>
+      </div>
+      <div class="feature-raw-item">
+        <div class="tile-icon">🌐</div>
+        <h4>ANY PROVIDER</h4>
+        <p>Unify OpenAI, Grok, Gemini, local models – all in one uncensored cockpit.</p>
+      </div>
+      <div class="feature-raw-item">
+        <div class="tile-icon">🧩</div>
+        <h4>CUSTOM API FORGE</h4>
+        <p>Plug any LLM endpoint, map responses, remove their guardrails. Full control.</p>
+      </div>
+      <div class="feature-raw-item">
+        <div class="tile-icon">💣</div>
+        <h4>DATA SOVEREIGNTY</h4>
+        <p>Optional local-only mode. Google login syncs if you want, but never logs prompts.</p>
+      </div>
+    </div>
+
+    <!-- footer -->
+    <div class="footer-raw">
+      <span>CRIMSON AI · THE UNCENSORED LAYER</span>
+      <span style="color:#ff7777;">#nofilters #freetokens</span>
+    </div>
+  </main>
+
+  <!-- clean micro-interaction + click handlers for platform/models/uncensored -->
+  <script>
+    (function() {
+      // Demo trigger (TEST NOW) - redirects to main app after showing activation message
+      const btn = document.getElementById('demoTrigger');
+      if(btn) {
+        btn.addEventListener('click', function(e){
+          e.preventDefault();
+          const msg = document.createElement('div');
+          msg.innerText = '> UNCENSORED MODE: ACTIVE';
+          msg.style.position = 'fixed';
+          msg.style.top = '50%';
+          msg.style.left = '50%';
+          msg.style.transform = 'translate(-50%, -50%)';
+          msg.style.background = '#0a0000';
+          msg.style.color = '#ff6666';
+          msg.style.fontFamily = '"JetBrains Mono", monospace';
+          msg.style.fontSize = '1.8rem';
+          msg.style.fontWeight = '700';
+          msg.style.padding = '2rem 3rem';
+          msg.style.border = '4px solid #ff0000';
+          msg.style.boxShadow = '0 0 150px #ff0000';
+          msg.style.zIndex = '9999';
+          msg.style.textAlign = 'center';
+          msg.style.textTransform = 'uppercase';
+          msg.style.letterSpacing = '2px';
+          msg.style.borderRadius = '8px';
+          document.body.appendChild(msg);
+          setTimeout(() => { 
+            msg.remove(); 
+            // Navigate to the main application served by the server
+            window.location.href = '/app';
+          }, 1200);
+        });
+      }
+      
+      // Add click handlers for all the main navigation links
+      const demoLink = document.getElementById('demoLink') || btn;
+      if(demoLink && demoLink !== btn) {
+        demoLink.addEventListener('click', function(e) {
+          e.preventDefault();
+          window.location.href = '/app';
+        });
+      }
+
+      // --- New click handlers for Platform, Models, Uncensored ---
+      function showNavMessage(itemName) {
+        // Remove any existing ephemeral message (avoid stacking)
+        const existing = document.getElementById('navFlashMsg');
+        if(existing) existing.remove();
+
+        const flash = document.createElement('div');
+        flash.id = 'navFlashMsg';
+        flash.innerText = `⚡ ${itemName.toUpperCase()} · COMMING SOON (UNCENSORED)`;
+        flash.style.position = 'fixed';
+        flash.style.top = '120px';
+        flash.style.right = '30px';
+        flash.style.background = '#1f0000';
+        flash.style.color = '#ffaaaa';
+        flash.style.fontFamily = '"JetBrains Mono", monospace';
+        flash.style.fontSize = '1.1rem';
+        flash.style.fontWeight = '500';
+        flash.style.padding = '0.8rem 1.8rem';
+        flash.style.border = '2px solid #aa2222';
+        flash.style.boxShadow = '0 0 30px #ff0000';
+        flash.style.zIndex = '9999';
+        flash.style.borderRadius = '40px';
+        flash.style.backdropFilter = 'blur(4px)';
+        flash.style.letterSpacing = '1px';
+        flash.style.textTransform = 'uppercase';
+        flash.style.borderLeft = '8px solid #ff3300';
+        document.body.appendChild(flash);
+
+        setTimeout(() => {
+          if(flash) flash.remove();
+        }, 2000);
+      }
+
+      const platformLink = document.getElementById('navPlatform');
+      const modelsLink = document.getElementById('navModels');
+      const uncensoredLink = document.getElementById('navUncensored');
+
+      if (platformLink) {
+        platformLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          showNavMessage('Platform');
+        });
+      }
+      if (modelsLink) {
+        modelsLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          showNavMessage('Models');
+        });
+      }
+      if (uncensoredLink) {
+        uncensoredLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          showNavMessage('Uncensored');
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
