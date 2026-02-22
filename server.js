@@ -14,6 +14,11 @@ const { sequelize, User, Chat, CustomApi, Setting, syncDatabase } = require('./m
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy for Render deployment (required for secure cookies)
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 // Enable CORS
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
