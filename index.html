@@ -1567,6 +1567,9 @@
       </div>
       
       <div class="sidebar-footer">
+        <button onclick="app.showBatchRunner()">
+          ⚡ Batch Runner
+        </button>
         <button onclick="app.showSettings()">
           ⚙️ Settings & API Keys
         </button>
@@ -1629,7 +1632,7 @@
         <div class="input-wrapper">
           <label class="file-upload-btn">
             📎
-            <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.md,.json,.js,.py,.html,.css,.csv,.xml" onchange="app.handleFileSelect(event)">
+            <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.md,.markdown,.json,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.rb,.go,.rs,.php,.html,.css,.scss,.sass,.less,.csv,.xml,.yml,.yaml,.sql,.sh,.bash,.log,.conf,.config,.env,.gitignore,.dockerfile,.toml,.ini,.doc,.docx,.xlsx" onchange="app.handleFileSelect(event)">
           </label>
           <div class="input-field-wrapper">
             <textarea 
@@ -1862,6 +1865,96 @@
       
       <div class="modal-actions">
         <button class="btn-secondary" onclick="app.closeTestModal()">Close</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Batch Runner Modal -->
+  <div class="modal-overlay" id="batchRunnerModal" style="display: none;" onclick="app.closeBatchRunner(event)">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width: 700px;">
+      <div class="modal-header">
+        <div class="modal-title">Batch File Processor</div>
+        <div class="modal-subtitle">Process large files in batch using AI</div>
+      </div>
+      
+      <div id="batchContent">
+        <!-- Batch Setup Form -->
+        <div id="batchSetupForm">
+          <div class="form-group">
+            <label class="form-label">Upload File (.csv, .txt, .xlsx)</label>
+            <input type="file" id="batchFileInput" accept=".csv,.txt,.xlsx" onchange="app.handleBatchFileSelect(event)">
+            <div id="batchFilePreview" style="margin-top: 10px;"></div>
+            <div class="form-help">Supported formats: CSV, TXT, XLSX (Max 1GB)</div>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Processing Prompt</label>
+            <textarea class="form-input form-textarea" id="batchPrompt" placeholder="E.g., 'Extract all email addresses and create a list', 'Summarize each row', 'Convert CSV to JSON format'"></textarea>
+            <div class="form-help">Describe what you want to do with the file</div>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">API Provider</label>
+            <select class="form-select" id="batchProvider">
+              <option value="current">Current Setting</option>
+              <option value="openai">OpenAI</option>
+              <option value="grok">Grok (xAI)</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="anthropic">Anthropic Claude</option>
+              <option value="cohere">Cohere</option>
+              <option value="ollama">Ollama (Local)</option>
+            </select>
+            <div class="form-help">Select which AI provider to use</div>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Output Format</label>
+            <select class="form-select" id="batchOutputFormat">
+              <option value="txt">Plain Text (.txt)</option>
+              <option value="csv">CSV (.csv)</option>
+              <option value="json">JSON (.json)</option>
+            </select>
+            <div class="form-help">Format for the output file</div>
+          </div>
+          
+          <div id="batchStatus" style="margin: 15px 0; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; display: none;">
+            <div style="display: flex; align-items: center;">
+              <div class="typing-indicator" style="margin-right: 10px;">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+              </div>
+              <span id="batchStatusText">Processing file...</span>
+            </div>
+            <div style="margin-top: 12px;">
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; color: rgba(255,255,255,0.7);">
+                <span id="batchProgressInfo">0 / 0 lines</span>
+                <span id="batchTimeInfo">ETA: --</span>
+              </div>
+              <div id="batchProgress" style="background: rgba(0,0,0,0.5); height: 8px; border-radius: 4px; overflow: hidden;">
+                <div id="batchProgressBar" style="height: 100%; background: linear-gradient(90deg, var(--accent-red), var(--accent-orange)); width: 0%; transition: width 0.3s;"></div>
+              </div>
+              <div style="margin-top: 6px; font-size: 12px; color: rgba(255,255,255,0.6);">
+                <span id="batchPercentage">0%</span> | <span id="batchCurrentLine">Line 0</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Batch Results -->
+        <div id="batchResultsContainer" style="display: none;">
+          <div style="margin: 15px 0; padding: 15px; background: rgba(100, 200, 100, 0.2); border-radius: 8px; border-left: 4px solid var(--accent-green);">
+            <div style="font-weight: bold; color: var(--accent-green); margin-bottom: 10px;">✓ Processing Complete</div>
+            <div id="batchResultsContent" style="max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;"></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="app.closeBatchRunner()">Close</button>
+        <button class="btn-primary" id="batchProcessBtn" onclick="app.processBatchFile()">Process File</button>
+        <button class="btn-primary" id="batchDownloadBtn" style="display: none; background: var(--accent-green);" onclick="app.downloadBatchResult()">📥 Download Result</button>
       </div>
     </div>
   </div>
@@ -2912,10 +3005,17 @@
       handleFileSelect(event) {
         const file = event.target.files[0];
         if (file) {
-          if (file.size > 10 * 1024 * 1024) {
-            this.showToast('File too large (max 10MB)', 'error');
+          // Support up to 1GB files
+          if (file.size > 1024 * 1024 * 1024) {
+            this.showToast('File too large (max 1GB)', 'error');
             return;
           }
+          
+          // Show warning for large files
+          if (file.size > 100 * 1024 * 1024) {
+            this.showToast(`Large file detected (${this.formatFileSize(file.size)}). Processing may take longer.`, 'info', 5000);
+          }
+          
           this.selectedFile = file;
           this.showFilePreview(file);
         }
@@ -2930,12 +3030,21 @@
       
       showFilePreview(file) {
         const preview = document.getElementById('filePreview');
+        const formattedSize = this.formatFileSize(file.size);
         preview.innerHTML = `
           <div class="file-preview">
-            <span>📎 ${file.name} (${(file.size / 1024).toFixed(1)} KB)</span>
+            <span>📎 ${file.name} (${formattedSize})</span>
             <button class="file-preview-remove" onclick="app.removeFile()">✕</button>
           </div>
         `;
+      },
+      
+      formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
       },
       
       removeFile() {
@@ -3159,11 +3268,70 @@
           formData.append('systemPrompt', config.systemPrompt);
         }
         
+        const hasLargeFile = this.selectedFile && this.selectedFile.size > 10 * 1024 * 1024;
+        
         if (this.selectedFile) {
           formData.append('file', this.selectedFile);
+          
+          // Show upload progress for large files
+          if (hasLargeFile) {
+            this.showToast(`Uploading ${this.formatFileSize(this.selectedFile.size)}...`, 'info', 10000);
+          }
+          
           this.removeFile();
         }
         
+        // Use XMLHttpRequest for upload progress tracking on large files
+        if (hasLargeFile) {
+          return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            
+            xhr.upload.addEventListener('progress', (e) => {
+              if (e.lengthComputable) {
+                const percentComplete = Math.round((e.loaded / e.total) * 100);
+                console.log(`Upload progress: ${percentComplete}%`);
+                
+                // Update toast or UI with progress
+                if (percentComplete < 100) {
+                  const toastContainer = document.getElementById('toastContainer');
+                  const existingToast = toastContainer.lastElementChild;
+                  if (existingToast && existingToast.textContent.includes('Uploading')) {
+                    existingToast.querySelector('span').textContent = `Uploading... ${percentComplete}%`;
+                  }
+                }
+              }
+            });
+            
+            xhr.addEventListener('load', () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                // Create a fake Response object for compatibility
+                const response = {
+                  ok: xhr.status >= 200 && xhr.status < 300,
+                  status: xhr.status,
+                  body: new ReadableStream({
+                    start(controller) {
+                      controller.enqueue(new TextEncoder().encode(xhr.responseText));
+                      controller.close();
+                    }
+                  }),
+                  text: () => Promise.resolve(xhr.responseText)
+                };
+                resolve(response);
+              } else {
+                reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+              }
+            });
+            
+            xhr.addEventListener('error', () => {
+              reject(new Error('Network error during upload'));
+            });
+            
+            xhr.open('POST', '/api/stream');
+            xhr.send(formData);
+          });
+        }
+        
+        // For smaller files, use fetch as normal
         return fetch('/api/stream', {
           method: 'POST',
           body: formData
@@ -3276,6 +3444,377 @@
         if (this.currentChatId) {
           this.loadChat(this.currentChatId);
         }
+      },
+      
+      // ============ BATCH RUNNER METHODS ============
+      
+      showBatchRunner() {
+        this.updateBatchProviderOptions();
+        document.getElementById('batchRunnerModal').style.display = 'flex';
+        this.resetBatchRunner();
+      },
+      
+      updateBatchProviderOptions() {
+        const providerSelect = document.getElementById('batchProvider');
+        const currentValue = providerSelect.value;
+        
+        // Clear and rebuild options
+        providerSelect.innerHTML = '';
+        
+        // Add preset providers
+        const presets = [
+          { value: 'current', label: 'Current Setting' },
+          { value: 'openai', label: 'OpenAI' },
+          { value: 'grok', label: 'Grok (xAI)' },
+          { value: 'deepseek', label: 'DeepSeek' },
+          { value: 'gemini', label: 'Google Gemini' },
+          { value: 'anthropic', label: 'Anthropic Claude' },
+          { value: 'cohere', label: 'Cohere' },
+          { value: 'ollama', label: 'Ollama (Local)' }
+        ];
+        
+        presets.forEach(preset => {
+          const option = document.createElement('option');
+          option.value = preset.value;
+          option.textContent = preset.label;
+          providerSelect.appendChild(option);
+        });
+        
+        // Add custom APIs if any exist
+        if (this.customApis && this.customApis.length > 0) {
+          // Add separator comment if there are custom APIs
+          const separatorOption = document.createElement('option');
+          separatorOption.disabled = true;
+          separatorOption.textContent = '── Custom APIs ──';
+          providerSelect.appendChild(separatorOption);
+          
+          // Add each custom API
+          this.customApis.forEach((api, index) => {
+            const option = document.createElement('option');
+            option.value = `custom_${index}`;
+            option.textContent = `📌 ${api.name || `Custom API ${index + 1}`}`;
+            providerSelect.appendChild(option);
+          });
+        }
+        
+        // Restore previous selection if it still exists
+        if ([...providerSelect.options].find(opt => opt.value === currentValue)) {
+          providerSelect.value = currentValue;
+        } else {
+          providerSelect.value = 'current';
+        }
+      },
+      
+      closeBatchRunner(event) {
+        if (!event || event.target.classList.contains('modal-overlay')) {
+          document.getElementById('batchRunnerModal').style.display = 'none';
+        }
+      },
+      
+      resetBatchRunner() {
+        document.getElementById('batchFileInput').value = '';
+        document.getElementById('batchPrompt').value = '';
+        document.getElementById('batchProvider').value = 'current';
+        document.getElementById('batchOutputFormat').value = 'txt';
+        document.getElementById('batchFilePreview').innerHTML = '';
+        document.getElementById('batchStatus').style.display = 'none';
+        document.getElementById('batchResultsContainer').style.display = 'none';
+        document.getElementById('batchSetupForm').style.display = 'block';
+        document.getElementById('batchProcessBtn').style.display = 'inline-block';
+        document.getElementById('batchProcessBtn').disabled = false;
+        document.getElementById('batchDownloadBtn').style.display = 'none';
+        document.getElementById('batchStatusText').textContent = 'Processing file...';
+        document.getElementById('batchProgressInfo').textContent = '0 / 0 lines';
+        document.getElementById('batchTimeInfo').textContent = 'ETA: --';
+        document.getElementById('batchPercentage').textContent = '0%';
+        document.getElementById('batchCurrentLine').textContent = 'Line 0';
+        document.getElementById('batchProgressBar').style.width = '0%';
+        this.batchFileData = null;
+        this.batchResults = null;
+      },
+      
+      handleBatchFileSelect(event) {
+        const file = event.target.files[0];
+        if (file) {
+          // Check file type
+          const validTypes = ['.csv', '.txt', '.xlsx'];
+          const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+          
+          if (!validTypes.includes(fileExt)) {
+            this.showToast('Only .csv, .txt, and .xlsx files are supported', 'error');
+            event.target.value = '';
+            return;
+          }
+          
+          // Check file size (max 1GB)
+          if (file.size > 1024 * 1024 * 1024) {
+            this.showToast('File too large (max 1GB)', 'error');
+            event.target.value = '';
+            return;
+          }
+          
+          // Store file data
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            this.batchFileData = {
+              name: file.name,
+              type: fileExt,
+              content: e.target.result,
+              size: this.formatFileSize(file.size)
+            };
+
+            // Re-arm batch UI for a new run without requiring modal refresh
+            document.getElementById('batchResultsContainer').style.display = 'none';
+            document.getElementById('batchStatus').style.display = 'none';
+            document.getElementById('batchProcessBtn').style.display = 'inline-block';
+            document.getElementById('batchProcessBtn').disabled = false;
+            document.getElementById('batchDownloadBtn').style.display = 'none';
+            
+            // Show preview
+            const preview = document.getElementById('batchFilePreview');
+            preview.innerHTML = `
+              <div style="padding: 10px; background: rgba(100, 200, 100, 0.1); border-radius: 6px; border-left: 3px solid var(--accent-green);">
+                <div style="font-weight: bold; color: var(--accent-green);">✓ File Selected</div>
+                <div style="font-size: 12px; margin-top: 5px;">
+                  <div>Name: ${file.name}</div>
+                  <div>Size: ${this.batchFileData.size}</div>
+                  <div>Type: ${fileExt.toUpperCase()}</div>
+                </div>
+              </div>
+            `;
+            
+            this.showToast(`File loaded: ${file.name}`, 'success');
+          };
+          
+          // Handle different file types
+          if (fileExt === '.xlsx') {
+            reader.readAsArrayBuffer(file);
+          } else {
+            reader.readAsText(file);
+          }
+        }
+      },
+      
+      async processBatchFile() {
+        const prompt = document.getElementById('batchPrompt').value.trim();
+        const provider = document.getElementById('batchProvider').value;
+        const outputFormat = document.getElementById('batchOutputFormat').value;
+        
+        if (!this.batchFileData) {
+          this.showToast('Please select a file first', 'error');
+          return;
+        }
+        
+        if (!prompt) {
+          this.showToast('Please enter a processing prompt', 'error');
+          return;
+        }
+        
+        const config = this.getConfig();
+        let selectedProvider = provider === 'current' ? document.getElementById('providerSelector').value : provider;
+        let customApiConfig = null;
+        
+        // Check if this is a custom API
+        if (selectedProvider.startsWith('custom_')) {
+          const customIndex = parseInt(selectedProvider.replace('custom_', ''));
+          if (this.customApis[customIndex]) {
+            customApiConfig = this.customApis[customIndex];
+            // selectedProvider will be handled specially as 'custom' in batch processing
+          } else {
+            this.showToast('Selected custom API not found', 'error');
+            return;
+          }
+        }
+        
+        // Get API key based on provider
+        let apiKey = '';
+        if (customApiConfig) {
+          apiKey = customApiConfig.key;
+          selectedProvider = 'custom';
+        } else if (selectedProvider === 'openai') apiKey = config.openaiKey;
+        else if (selectedProvider === 'grok') apiKey = config.grokKey;
+        else if (selectedProvider === 'deepseek') apiKey = config.deepseekKey;
+        else if (selectedProvider === 'gemini') apiKey = config.geminiKey;
+        else if (selectedProvider === 'anthropic') apiKey = config.anthropicKey;
+        else if (selectedProvider === 'cohere') apiKey = config.cohereKey;
+        
+        if (!apiKey && selectedProvider !== 'ollama' && selectedProvider !== 'custom') {
+          this.showToast(`Please configure ${selectedProvider} API key in settings`, 'error');
+          return;
+        }
+        
+        // Show processing status
+        document.getElementById('batchStatus').style.display = 'block';
+        document.getElementById('batchSetupForm').style.display = 'block';
+        document.getElementById('batchProcessBtn').disabled = true;
+        
+        // Store batch processing start time
+        const processingStartTime = Date.now();
+        let progressInterval = null;
+        
+        try {
+          const requestBody = {
+            fileContent: this.batchFileData.content,
+            fileName: this.batchFileData.name,
+            fileType: this.batchFileData.type,
+            prompt: prompt,
+            provider: selectedProvider,
+            apiKey: apiKey,
+            outputFormat: outputFormat,
+            systemPrompt: config.systemPrompt
+          };
+          
+          // Add custom API config if using a custom API
+          if (customApiConfig) {
+            requestBody.customApiConfig = {
+              name: customApiConfig.name,
+              url: customApiConfig.url,
+              format: customApiConfig.format,
+              model: customApiConfig.model,
+              key: customApiConfig.key,
+              headers: customApiConfig.headers || {},
+              customBody: customApiConfig.customBody,
+              responsePath: customApiConfig.responsePath
+            };
+          }
+          
+          // Start polling for real progress updates from server
+          progressInterval = setInterval(async () => {
+            try {
+              const progressResponse = await fetch('/api/batch-progress');
+              const progressData = await progressResponse.json();
+              
+              if (progressData.isProcessing) {
+                const elapsedSeconds = Math.floor((Date.now() - processingStartTime) / 1000);
+                const percentage = progressData.totalLines > 0 
+                  ? Math.floor((progressData.processedLines / progressData.totalLines) * 100) 
+                  : 0;
+                
+                // Format ETA display
+                let etaDisplay = 'ETA: ';
+                if (progressData.estimatedTimeRemaining > 60) {
+                  const minutes = Math.floor(progressData.estimatedTimeRemaining / 60);
+                  const seconds = progressData.estimatedTimeRemaining % 60;
+                  etaDisplay += `${minutes}m ${seconds}s`;
+                } else {
+                  etaDisplay += `${progressData.estimatedTimeRemaining}s`;
+                }
+                
+                // Update UI elements with REAL server data
+                document.getElementById('batchStatusText').textContent = `Processing file (${elapsedSeconds}s)...`;
+                document.getElementById('batchProgressInfo').textContent = `${progressData.processedLines} / ${progressData.totalLines} lines`;
+                document.getElementById('batchTimeInfo').textContent = etaDisplay;
+                document.getElementById('batchPercentage').textContent = `${percentage}%`;
+                document.getElementById('batchCurrentLine').textContent = `Line ${progressData.processedLines}`;
+                document.getElementById('batchProgressBar').style.width = `${percentage}%`;
+              }
+            } catch (e) {
+              console.error('Error fetching progress:', e);
+            }
+          }, 500); // Poll every 500ms for smooth updates
+          
+          const response = await fetch('/api/batch-process', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+          });
+          
+          // Clear progress interval
+          if (progressInterval) clearInterval(progressInterval);
+          
+          if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Batch processing failed');
+          }
+          
+          const data = await response.json();
+          
+          if (data.success) {
+            const totalElapsedSeconds = Math.floor((Date.now() - processingStartTime) / 1000);
+            
+            // Update progress bar to 100% on completion
+            document.getElementById('batchPercentage').textContent = '100%';
+            document.getElementById('batchProgressBar').style.width = '100%';
+            document.getElementById('batchProgressInfo').textContent = `${data.linesProcessed} / ${data.linesProcessed} lines`;
+            document.getElementById('batchTimeInfo').textContent = `Completed in ${totalElapsedSeconds}s`;
+            document.getElementById('batchCurrentLine').textContent = `Line ${data.linesProcessed}`;
+            
+            this.batchResults = {
+              content: data.output,
+              fileName: data.fileName,
+              format: outputFormat,
+              originalFileName: this.batchFileData.name,
+              linesProcessed: data.linesProcessed,
+              successfulLines: data.successfulLines
+            };
+            
+            // Show results with summary
+            const summaryText = `📊 Batch Processing Summary\n`;
+            const providerText = `Provider: ${data.provider}\n`;
+            const linesText = `✓ Processed ${data.linesProcessed} lines (${data.successfulLines} successful)\n`;
+            const timeText = `⏱️ Completed in ${totalElapsedSeconds}s\n`;
+            const avgTimePerLine = totalElapsedSeconds > 0 ? (totalElapsedSeconds / data.linesProcessed).toFixed(2) : '0';
+            const speedText = `Speed: ~${avgTimePerLine}s/line\n`;
+            const separator = `${'─'.repeat(40)}\n\n`;
+            
+            const resultPreview = summaryText + providerText + linesText + timeText + speedText + separator + data.output;
+            
+            document.getElementById('batchResultsContent').textContent = resultPreview;
+            document.getElementById('batchResultsContainer').style.display = 'block';
+            document.getElementById('batchStatus').style.display = 'none';
+            document.getElementById('batchDownloadBtn').style.display = 'inline-block';
+            document.getElementById('batchProcessBtn').style.display = 'inline-block';
+            document.getElementById('batchProcessBtn').disabled = false;
+            
+            this.showToast(`✓ Batch processing complete! ${data.linesProcessed} lines processed in ${totalElapsedSeconds}s.`, 'success');
+          } else {
+            throw new Error(data.error || 'Processing failed');
+          }
+          
+        } catch (error) {
+          console.error('Batch processing error:', error);
+          if (progressInterval) clearInterval(progressInterval);
+          document.getElementById('batchStatus').style.display = 'none';
+          document.getElementById('batchSetupForm').style.display = 'block';
+          document.getElementById('batchProcessBtn').disabled = false;
+          this.showToast(`Error: ${error.message}`, 'error');
+        }
+      },
+      
+      downloadBatchResult() {
+        if (!this.batchResults) {
+          this.showToast('No results to download', 'error');
+          return;
+        }
+        
+        const { content, fileName, format, originalFileName } = this.batchResults;
+        
+        // Create blob based on format
+        let blob, mimeType, extension;
+        
+        if (format === 'json') {
+          blob = new Blob([content], { type: 'application/json' });
+          mimeType = 'application/json';
+          extension = '.json';
+        } else if (format === 'csv') {
+          blob = new Blob([content], { type: 'text/csv' });
+          mimeType = 'text/csv';
+          extension = '.csv';
+        } else {
+          blob = new Blob([content], { type: 'text/plain' });
+          mimeType = 'text/plain';
+          extension = '.txt';
+        }
+        
+        // Create download link
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `batch_result_${Date.now()}${extension}`;
+        link.click();
+        
+        URL.revokeObjectURL(url);
+        this.showToast('Download started!', 'success');
       }
     };
     
