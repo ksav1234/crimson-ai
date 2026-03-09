@@ -1514,7 +1514,12 @@ app.get('/api/batch-progress', (req, res) => {
 });
 
 // Batch processing endpoint - Line by line
-app.post('/api/batch-process', async (req, res) => {
+// Extended timeout middleware for large file processing (10 minutes)
+app.post('/api/batch-process', (req, res, next) => {
+  req.setTimeout(10 * 60 * 1000);  // 10 minutes for request
+  res.setTimeout(10 * 60 * 1000);  // 10 minutes for response
+  next();
+}, async (req, res) => {
   try {
     console.log('Batch process endpoint called');
     console.log('Request body keys:', req.body ? Object.keys(req.body) : 'req.body is undefined');
@@ -1903,8 +1908,13 @@ app.post('/api/batch-process', async (req, res) => {
     }
     
     if (error.name === 'AbortError') {
-      res.status(408).json({ error: 'Request timeout - API took too long to respond' });
+      console.error('Abort error during batch processing:', error.message);
+      res.status(408).json({ error: 'Request timeout - Processing took too long' });
+    } else if (error.message && error.message.includes('timeout')) {
+      console.error('Timeout error during batch processing:', error.message);
+      res.status(408).json({ error: 'Request timeout - File processing exceeded time limit' });
     } else {
+      console.error('Batch processing error details:', { message: error.message, name: error.name, stack: error.stack });
       res.status(500).json({ error: error.message || 'Batch processing failed' });
     }
   }
@@ -1965,7 +1975,7 @@ setInterval(async () => {
 (async () => {
   await syncDatabase();
   
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log('\n🚀 CRIMSON AI Server Running!');
     console.log('='.repeat(50));
     console.log(`📍 URL: http://localhost:${PORT}`);
@@ -1998,5 +2008,9 @@ setInterval(async () => {
     console.log('   • http://localhost:3000/app - Main chat app (index.html)');
     console.log('   • http://localhost:3000/auth/google - Google login');
     console.log('='.repeat(50));
+    
+    // Set server-level timeout for large file processing
+    server.timeout = 10 * 60 * 1000; // 10 minutes for the entire request/response cycle
+    server.keepAliveTimeout = 65 * 1000; // Keep-alive timeout
   });
 })();

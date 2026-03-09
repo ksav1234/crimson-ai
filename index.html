@@ -3746,11 +3746,32 @@
           if (elapsedInterval) clearInterval(elapsedInterval);
           
           if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Batch processing failed');
+            // Try to parse error response as JSON
+            let errorMessage = 'Batch processing failed';
+            try {
+              const contentType = response.headers.get('content-type');
+              if (contentType && contentType.includes('application/json')) {
+                const error = await response.json();
+                errorMessage = error.error || 'Batch processing failed';
+              } else if (response.status === 408) {
+                errorMessage = 'Request timeout: File processing took too long (max 10 minutes)';
+              } else if (response.status === 413) {
+                errorMessage = 'File too large: Request body exceeded size limit. Try splitting into smaller files.';
+              } else {
+                // Response is likely HTML error page
+                errorMessage = `Server error (${response.status}): ${response.statusText || 'Unknown error'}. This usually means file is too large or processing took too long.`;
+              }
+            } catch (parseErr) {
+              // JSON parsing failed - response is likely HTML error page
+              errorMessage = `Server error (${response.status}): Unable to process - file may be too large or request timeout. Try splitting the file into smaller parts.`;
+            }
+            throw new Error(errorMessage);
           }
           
-          const data = await response.json();
+          const data = await response.json().catch(parseErr => {
+            console.error('Failed to parse response as JSON:', parseErr);
+            throw new Error(`Failed to parse server response (${response.status}): This usually indicates the file is too large or the connection was interrupted. Try breaking the file into smaller batches.`);
+          });
           
           if (data.success) {
             const totalElapsedSeconds = Math.floor((Date.now() - processingStartTime) / 1000);
