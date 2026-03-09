@@ -1148,6 +1148,189 @@ function arrayToCSVLine(arr) {
   }).join(',');
 }
 
+// Helper function to clean API responses - remove JSON, code blocks, metadata
+function cleanAPIResponse(content) {
+  if (!content || typeof content !== 'string') return '';
+  
+  let cleaned = content.trim();
+
+  // Unwrap fenced code blocks while keeping inner content.
+  const fencedMatch = cleaned.match(/^```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```$/);
+  if (fencedMatch && fencedMatch[1]) {
+    cleaned = fencedMatch[1].trim();
+  } else {
+    cleaned = cleaned.replace(/```[a-zA-Z0-9_-]*\n?/g, '').replace(/```/g, '').trim();
+  }
+  
+  // Remove JSON objects that look like metadata (e.g., {"response": "...", "metadata": ...})
+  // Only if the entire response is a single JSON object
+  if (cleaned.startsWith('{') && cleaned.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(cleaned);
+      // If JSON has a "response" or "answer" field, extract it
+      if (parsed.response && typeof parsed.response === 'string') {
+        cleaned = parsed.response;
+      } else if (parsed.answer && typeof parsed.answer === 'string') {
+        cleaned = parsed.answer;
+      } else if (parsed.text && typeof parsed.text === 'string') {
+        cleaned = parsed.text;
+      } else {
+        // If it's a simple key-value object, keep as is
+        // Otherwise extract first string value
+        const stringValues = Object.values(parsed).filter(v => typeof v === 'string');
+        if (stringValues.length === 1) {
+          cleaned = stringValues[0];
+        }
+      }
+    } catch (e) {
+      // Not valid JSON, keep as is
+    }
+  }
+  
+  // Remove common metadata prefixes
+  cleaned = cleaned.replace(/^(Response:|Answer:|Result:|Output:)\s*/i, '');
+  
+  // Remove leading/trailing quotes if entire response is quoted
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+      (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  
+  // Remove excessive newlines (more than 2)
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  
+  return cleaned.trim();
+}
+
+// Extract first meaningful string from nested objects/arrays.
+function extractFirstStringValue(value, maxDepth = 4) {
+  if (maxDepth < 0 || value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractFirstStringValue(item, maxDepth - 1);
+      if (found) return found;
+    }
+    return '';
+  }
+
+  if (typeof value === 'object') {
+    for (const key of Object.keys(value)) {
+      const found = extractFirstStringValue(value[key], maxDepth - 1);
+      if (found) return found;
+    }
+  }
+
+  return '';
+}
+
+// Prefer likely response keys before generic deep scan.
+function extractLikelyResponseText(apiResponse) {
+  if (!apiResponse || typeof apiResponse !== 'object') return '';
+
+  const directCandidates = [
+    apiResponse.response,
+    apiResponse.output,
+    apiResponse.result,
+    apiResponse.answer,
+    apiResponse.text,
+    apiResponse.content,
+    apiResponse.message
+  ];
+
+  for (const candidate of directCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate;
+    }
+    const nested = extractFirstStringValue(candidate);
+    if (nested) return nested;
+  }
+
+  return extractFirstStringValue(apiResponse);
+}
+
+// Final sanitizer for CSV response column: keep only pure response text.
+function sanitizeCSVResponse(value, headerColumns = []) {
+  if (value === null || value === undefined) return '';
+
+  let text = String(value).trim();
+  if (!text) return '';
+
+  // Reuse base cleaner first.
+  text = cleanAPIResponse(text);
+
+  // If content is still JSON-looking, extract meaningful text.
+  if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(text);
+      const extracted = extractLikelyResponseText(parsed);
+      if (extracted) text = extracted;
+    } catch (e) {
+      // Keep text as-is when not valid JSON.
+    }
+  }
+
+  // Strip common wrappers/labels that are not part of the answer.
+  text = text
+    .replace(/^(AI[_\s-]*Response|Response|Answer|Result|Output)\s*[:\-]\s*/i, '')
+    .replace(/^Here\s+is\s+the\s+(response|answer)\s*[:\-]\s*/i, '')
+    .replace(/^Final\s+(response|answer)\s*[:\-]\s*/i, '');
+
+  // Collapse excessive whitespace but keep readable line breaks.
+  text = text.replace(/\r/g, '').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+
+  // Remove echoed CSV header lines (e.g., "payload,response").
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length > 0) {
+    const firstLine = lines[0].toLowerCase();
+    const normalizedHeaders = headerColumns
+      .map(h => String(h || '').trim().toLowerCase())
+      .filter(Boolean);
+
+    const expectedHeader = normalizedHeaders.join(',');
+    if ((expectedHeader && firstLine === expectedHeader) || firstLine === 'payload,response') {
+      lines.shift();
+      text = lines.join('\n').trim();
+    }
+  }
+
+  return text;
+}
+
+// Ensure custom API payloads also carry system instructions in common field shapes.
+function enforceSystemPromptInCustomBody(requestBody, systemPrompt) {
+  if (!requestBody || !systemPrompt || !systemPrompt.trim()) return requestBody;
+
+  const promptText = systemPrompt.trim();
+
+  if (Array.isArray(requestBody.messages) && !requestBody.messages.some(m => m && m.role === 'system')) {
+    requestBody.messages = [{ role: 'system', content: promptText }, ...requestBody.messages];
+  }
+
+  if (Array.isArray(requestBody.input) && !requestBody.input.some(m => m && m.role === 'system')) {
+    requestBody.input = [{ role: 'system', content: promptText }, ...requestBody.input];
+  }
+
+  if (typeof requestBody.system === 'undefined' && typeof requestBody.preamble === 'undefined') {
+    requestBody.system = promptText;
+  }
+
+  // Common single-string prompt shapes for custom APIs.
+  const candidateFields = ['prompt', 'query', 'text', 'message', 'instruction'];
+  for (const field of candidateFields) {
+    if (typeof requestBody[field] === 'string' && requestBody[field].trim().length > 0) {
+      const content = requestBody[field];
+      if (!content.includes(promptText)) {
+        requestBody[field] = `System instructions:\n${promptText}\n\n${content}`;
+      }
+      break;
+    }
+  }
+
+  return requestBody;
+}
+
 // Helper function to process single line through API with retry logic
 async function processLineWithAPI(line, prompt, provider, apiKey, systemPrompt, format, modelName, apiUrl, apiHeaders, lineIndex, rowContext = null, customApiConfig = null) {
   const maxRetries = 2;
@@ -1155,25 +1338,26 @@ async function processLineWithAPI(line, prompt, provider, apiKey, systemPrompt, 
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      // Build minimal, fast message for CSV processing
+      // Build minimal message for CSV processing
       let userMessage = '';
       
       if (rowContext) {
-        // For CSV files: minimal format focused on data + task only
-        userMessage = `Row ${lineIndex}: ${JSON.stringify(rowContext)}
-
-Task: ${prompt}
-
-Provide ONLY the response. No explanations, no metadata, no extra text.`;
+        // For CSV files: minimal format for fast processing
+        userMessage = `${prompt}\n\nData: ${JSON.stringify(rowContext)}\n\nReturn only the final response text. No JSON, no metadata, no labels.`;
       } else {
         // For non-CSV files
-        userMessage = `${prompt}\n\nLine ${lineIndex}:\n${line}`;
+        userMessage = `${prompt}\n\n${line}`;
       }
 
       const messages = [{
         role: 'user',
         content: userMessage
       }];
+
+      // Ensure system prompt is consistently available for batch processing.
+      const messagesWithSystem = (systemPrompt && systemPrompt.trim())
+        ? [{ role: 'system', content: systemPrompt.trim() }, ...messages]
+        : messages;
       
       // Build request body - handle custom API with template or standard formatMessagesForAPI
       let requestBody;
@@ -1181,13 +1365,14 @@ Provide ONLY the response. No explanations, no metadata, no extra text.`;
         // Use custom body template
         try {
           let bodyTemplate = customApiConfig.customBody;
-          bodyTemplate = bodyTemplate.replace(/{{messages}}/g, JSON.stringify(messages));
+          bodyTemplate = bodyTemplate.replace(/{{messages}}/g, JSON.stringify(messagesWithSystem));
           bodyTemplate = bodyTemplate.replace(/{{model}}/g, modelName);
           bodyTemplate = bodyTemplate.replace(/{{apiKey}}/g, customApiConfig.key);
           if (systemPrompt) {
             bodyTemplate = bodyTemplate.replace(/{{systemPrompt}}/g, systemPrompt);
           }
           requestBody = JSON.parse(bodyTemplate);
+          requestBody = enforceSystemPromptInCustomBody(requestBody, systemPrompt);
         } catch (e) {
           console.error('Error parsing custom body template:', e);
           requestBody = formatMessagesForAPI(messages, format, modelName, systemPrompt || '', false);
@@ -1195,10 +1380,43 @@ Provide ONLY the response. No explanations, no metadata, no extra text.`;
       } else {
         // Use standard format
         requestBody = formatMessagesForAPI(messages, format, modelName, systemPrompt || '', false);
+
+        // Custom APIs with format='custom' may not have a template.
+        if (!requestBody && customApiConfig) {
+          requestBody = {
+            model: modelName,
+            messages: messagesWithSystem,
+            prompt: userMessage
+          };
+
+          if (systemPrompt && systemPrompt.trim()) {
+            requestBody.system = systemPrompt.trim();
+          }
+
+          requestBody = enforceSystemPromptInCustomBody(requestBody, systemPrompt);
+        }
+      }
+      
+      // Optimize for batch processing: fixed settings for consistent speed
+      if (format === 'openai') {
+        requestBody.max_tokens = 4096;
+        requestBody.temperature = 0.3;
+      } else if (format === 'anthropic') {
+        requestBody.max_tokens = 4096;
+        requestBody.temperature = 0.3;
+      } else if (format === 'gemini') {
+        requestBody.generationConfig.maxOutputTokens = 4096;
+        requestBody.generationConfig.temperature = 0.3;
+      } else if (format === 'cohere') {
+        requestBody.max_tokens = 4096;
+        requestBody.temperature = 0.3;
+      } else if (format === 'ollama') {
+        requestBody.options.num_predict = 4096;
+        requestBody.options.temperature = 0.3;
       }
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout per line
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout per line
       
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -1214,8 +1432,8 @@ Provide ONLY the response. No explanations, no metadata, no extra text.`;
         console.error(`API error (attempt ${attempt + 1}): ${response.status} - ${errorText.substring(0, 100)}`);
         
         if (attempt < maxRetries && (response.status === 429 || response.status >= 500)) {
-          // Rate limited or server error, retry
-          await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+          // Rate limited or server error, retry with shorter delay
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
           continue;
         }
         
@@ -1224,27 +1442,42 @@ Provide ONLY the response. No explanations, no metadata, no extra text.`;
       
       const apiResponse = await response.json();
       let extractedContent = '';
-      
-      if (format === 'openai') {
-        extractedContent = apiResponse.choices?.[0]?.message?.content || '';
-      } else if (format === 'anthropic') {
-        extractedContent = apiResponse.content?.[0]?.text || '';
-      } else if (format === 'gemini') {
-        extractedContent = apiResponse.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      } else if (format === 'cohere') {
-        extractedContent = apiResponse.text || '';
-      } else if (format === 'ollama') {
-        extractedContent = apiResponse.message?.content || '';
+
+      // Custom APIs: respect configured responsePath first.
+      if (customApiConfig?.responsePath) {
+        const customPathValue = getValueByPath(apiResponse, customApiConfig.responsePath);
+        if (typeof customPathValue === 'string') {
+          extractedContent = customPathValue;
+        } else if (customPathValue !== null && customPathValue !== undefined) {
+          extractedContent = extractFirstStringValue(customPathValue);
+        }
       }
       
-      return extractedContent.trim() || '[No response]';
+      if (!extractedContent && format === 'openai') {
+        extractedContent = apiResponse.choices?.[0]?.message?.content || '';
+      } else if (!extractedContent && format === 'anthropic') {
+        extractedContent = apiResponse.content?.[0]?.text || '';
+      } else if (!extractedContent && format === 'gemini') {
+        extractedContent = apiResponse.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      } else if (!extractedContent && format === 'cohere') {
+        extractedContent = apiResponse.text || '';
+      } else if (!extractedContent && format === 'ollama') {
+        extractedContent = apiResponse.message?.content || '';
+      } else if (!extractedContent && format === 'custom') {
+        extractedContent = extractLikelyResponseText(apiResponse);
+      }
+      
+      // Clean response: remove JSON blocks, code blocks, and metadata
+      const cleanedContent = cleanAPIResponse(extractedContent);
+      
+      return cleanedContent || '[No response]';
       
     } catch (e) {
       lastError = e;
       console.error(`Error processing line (attempt ${attempt + 1}/${maxRetries + 1}):`, e.message);
       
       if (attempt < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
       }
     }
   }
@@ -1255,6 +1488,7 @@ Provide ONLY the response. No explanations, no metadata, no extra text.`;
 
 // Global progress tracker for batch processing
 let batchProgress = {
+  batchId: null,
   isProcessing: false,
   totalLines: 0,
   processedLines: 0,
@@ -1265,7 +1499,18 @@ let batchProgress = {
 
 // Progress tracking endpoint
 app.get('/api/batch-progress', (req, res) => {
-  res.json(batchProgress);
+  const total = Math.max(0, Number(batchProgress.totalLines) || 0);
+  const processed = Math.max(0, Math.min(Number(batchProgress.processedLines) || 0, total));
+  const successful = Math.max(0, Math.min(Number(batchProgress.successfulLines) || 0, processed));
+  const eta = Math.max(0, Number(batchProgress.estimatedTimeRemaining) || 0);
+
+  res.json({
+    ...batchProgress,
+    totalLines: total,
+    processedLines: processed,
+    successfulLines: successful,
+    estimatedTimeRemaining: eta
+  });
 });
 
 // Batch processing endpoint - Line by line
@@ -1279,7 +1524,7 @@ app.post('/api/batch-process', async (req, res) => {
       return res.status(400).json({ error: 'Request body is empty' });
     }
     
-    const { fileContent, fileName, fileType, prompt, provider, apiKey, outputFormat, systemPrompt, customApiConfig } = req.body;
+    const { fileContent, fileName, fileType, prompt, provider, apiKey, outputFormat, systemPrompt, customApiConfig, batchRequestId } = req.body;
     
     if (!fileContent) {
       return res.status(400).json({ error: 'File content is required' });
@@ -1411,30 +1656,35 @@ app.post('/api/batch-process', async (req, res) => {
         return res.status(400).json({ error: 'Unsupported provider' });
     }
     
-    // Determine adaptive batch size based on file size
-    // Smaller files use larger batches, larger files use smaller batches to avoid timeouts
-    let batchSize = 500;
+    // Determine concurrent processing settings for optimal performance
+    // Concurrent requests = number of API calls to make simultaneously
+    // Batch size = how many lines to process before checking timeout
+    const concurrentRequests = 15; // Process 15 lines at a time for maximum speed
+    let batchSize = 2000; // With concurrent processing, we can use larger batches
+    
     if (allLines.length < 100) {
-      batchSize = 1000; // Very small files, use larger batches
-    } else if (allLines.length < 300) {
-      batchSize = 800;  // Small files
-    } else if (allLines.length < 1000) {
-      batchSize = 500;  // Medium files
-    } else if (allLines.length < 2000) {
-      batchSize = 300;  // Large files
+      batchSize = allLines.length; // Process all at once for tiny files
+    } else if (allLines.length < 500) {
+      batchSize = 500;  // Small files
+    } else if (allLines.length < 1500) {
+      batchSize = 1500;  // Medium files  
     } else {
-      batchSize = 200;  // Very large files
+      batchSize = 2000;  // Large files (2000+ rows will use 2000 line batches)
     }
     
-    console.log(`Using adaptive batch size: ${batchSize} lines for ${allLines.length} total lines`);
+    console.log(`Using concurrent processing: ${concurrentRequests} parallel requests, batch size: ${batchSize} lines for ${allLines.length} total lines`);
     
     // Process each line in adaptive batches to prevent timeout
-    const results = [];
+    // Pre-allocate results array for concurrent processing
+    const results = new Array(allLines.length).fill(null);
     let successCount = 0;
+    let completedCount = 0;
     const startTime = Date.now();
+    const currentBatchId = batchRequestId || `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     
     // Initialize global progress tracker
     batchProgress = {
+      batchId: currentBatchId,
       isProcessing: true,
       totalLines: allLines.length,
       processedLines: 0,
@@ -1447,55 +1697,98 @@ app.post('/api/batch-process', async (req, res) => {
       const batchEnd = Math.min(batchStart + batchSize, allLines.length);
       const batchLines = allLines.slice(batchStart, batchEnd);
       
-      console.log(`Processing batch: lines ${batchStart + 1}-${batchEnd} of ${allLines.length} (batch size: ${batchSize})`);
+      console.log(`Processing batch: lines ${batchStart + 1}-${batchEnd} of ${allLines.length} (concurrent: ${concurrentRequests})`);
       
-      for (let i = 0; i < batchLines.length; i++) {
-        const line = batchLines[i];
-        const actualLineIndex = batchStart + i;
+      // Process lines concurrently in chunks for better performance
+      for (let chunkStart = 0; chunkStart < batchLines.length; chunkStart += concurrentRequests) {
+        const chunkEnd = Math.min(chunkStart + concurrentRequests, batchLines.length);
+        const concurrentChunk = batchLines.slice(chunkStart, chunkEnd);
         
-        let rowContext = null;
-        if ((fileType === '.csv' || fileType === '.xlsx') && headerColumns.length > 0) {
-          const rowValues = parseCSVLine(line);
-          rowContext = {};
-          for (let colIndex = 0; colIndex < headerColumns.length; colIndex++) {
-            const columnName = headerColumns[colIndex] || `column_${colIndex + 1}`;
-            rowContext[columnName] = rowValues[colIndex] || '';
+        // Create array of promises for concurrent processing
+        const promises = concurrentChunk.map(async (line, chunkIndex) => {
+          const actualLineIndex = batchStart + chunkStart + chunkIndex;
+          
+          let rowContext = null;
+          if ((fileType === '.csv' || fileType === '.xlsx') && headerColumns.length > 0) {
+            const rowValues = parseCSVLine(line);
+            rowContext = {};
+            for (let colIndex = 0; colIndex < headerColumns.length; colIndex++) {
+              const columnName = headerColumns[colIndex] || `column_${colIndex + 1}`;
+              rowContext[columnName] = rowValues[colIndex] || '';
+            }
+          }
+          
+          // Process line through API (WITH system prompt for proper response generation)
+          const result = await processLineWithAPI(
+            line,
+            prompt,
+            provider,
+            apiKey,
+            systemPrompt,
+            format,
+            modelName,
+            apiUrl,
+            apiHeaders,
+            actualLineIndex + 1,
+            rowContext,
+            customApiConfig
+          );
+          
+          return { index: actualLineIndex, result };
+        });
+        
+        // Wait for all concurrent requests to complete
+        const chunkResults = await Promise.allSettled(promises);
+        
+        // Process results and update progress
+        for (const promiseResult of chunkResults) {
+          if (promiseResult.status === 'fulfilled') {
+            const { index, result } = promiseResult.value;
+            results[index] = result;
+            completedCount++;
+            
+            if (!result.includes('[') && result.length > 0) {
+              successCount++;
+            }
+            
+            // Update global progress tracker
+            const elapsedTime = Date.now() - startTime;
+            const processedSoFar = completedCount;
+            const timePerLine = elapsedTime / processedSoFar;
+            const remainingLines = allLines.length - processedSoFar;
+            const estimatedTimeRemaining = Math.ceil(timePerLine * remainingLines / 1000);
+
+            if (batchProgress.batchId === currentBatchId) {
+              batchProgress.processedLines = Math.min(processedSoFar, allLines.length);
+              batchProgress.successfulLines = Math.min(successCount, batchProgress.processedLines);
+              batchProgress.estimatedTimeRemaining = Math.max(0, estimatedTimeRemaining);
+            }
+            
+            // Log progress every 25 lines
+            if (processedSoFar % 25 === 0) {
+              console.log(`Processed ${processedSoFar}/${allLines.length} lines - ETA: ~${estimatedTimeRemaining}s (${Math.round(processedSoFar/allLines.length*100)}%)`);
+            }
+          } else {
+            completedCount++;
+            console.error('Promise rejected:', promiseResult.reason);
+
+            if (batchProgress.batchId === currentBatchId) {
+              const elapsedTime = Date.now() - startTime;
+              const processedSoFar = completedCount;
+              const timePerLine = elapsedTime / Math.max(processedSoFar, 1);
+              const remainingLines = allLines.length - processedSoFar;
+              const estimatedTimeRemaining = Math.ceil(timePerLine * remainingLines / 1000);
+
+              batchProgress.processedLines = Math.min(processedSoFar, allLines.length);
+              batchProgress.successfulLines = Math.min(successCount, batchProgress.processedLines);
+              batchProgress.estimatedTimeRemaining = Math.max(0, estimatedTimeRemaining);
+            }
           }
         }
-        // Process line through API (WITH system prompt for proper response generation)
-        const result = await processLineWithAPI(
-          line,
-          prompt,
-          provider,
-          apiKey,
-          systemPrompt,
-          format,
-          modelName,
-          apiUrl,
-          apiHeaders,
-          actualLineIndex + 1,
-          rowContext,
-          customApiConfig
-        );
         
-        results.push(result);
-        if (!result.includes('[') && result.length > 0) {
-          successCount++;
-        }
-        
-        // Update global progress tracker after each line
-        const elapsedTime = Date.now() - startTime;
-        const timePerLine = elapsedTime / (actualLineIndex + 1);
-        const remainingLines = allLines.length - (actualLineIndex + 1);
-        const estimatedTimeRemaining = Math.ceil(timePerLine * remainingLines / 1000);
-        
-        batchProgress.processedLines = actualLineIndex + 1;
-        batchProgress.successfulLines = successCount;
-        batchProgress.estimatedTimeRemaining = estimatedTimeRemaining;
-        
-        // Log progress every 10 lines
-        if (actualLineIndex % 10 === 0) {
-          console.log(`Processing line ${actualLineIndex + 1}/${allLines.length} - ETA: ~${estimatedTimeRemaining}s`);
+        // Small delay between concurrent chunks to avoid rate limiting
+        if (chunkEnd < batchLines.length) {
+          await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
     }
@@ -1504,8 +1797,12 @@ app.post('/api/batch-process', async (req, res) => {
     console.log(`Batch processing completed: ${successCount}/${allLines.length} lines successfully processed in ${totalElapsedTime}ms`);
     
     // Mark processing as complete
-    batchProgress.isProcessing = false;
-    batchProgress.estimatedTimeRemaining = 0;
+    if (batchProgress.batchId === currentBatchId) {
+      batchProgress.isProcessing = false;
+      batchProgress.processedLines = allLines.length;
+      batchProgress.successfulLines = Math.min(successCount, allLines.length);
+      batchProgress.estimatedTimeRemaining = 0;
+    }
     
     // Format output based on file type
     let formattedOutput = '';
@@ -1513,14 +1810,34 @@ app.post('/api/batch-process', async (req, res) => {
     if ((fileType === '.csv' || outputFormat === 'csv') && headerLine) {
       // Build CSV with output column
       const csvLines = [];
-      const outputHeader = arrayToCSVLine([...headerColumns, 'AI_Response']);
+      const existingResponseIndex = headerColumns.findIndex(col => {
+        const key = String(col || '').trim().toLowerCase();
+        return key === 'response' || key === 'ai_response';
+      });
+
+      const outputHeader = existingResponseIndex >= 0
+        ? arrayToCSVLine(headerColumns)
+        : arrayToCSVLine([...headerColumns, 'AI_Response']);
       csvLines.push(outputHeader);
       
       for (let i = 0; i < results.length; i++) {
         const originalLine = allLines[i];
-        const result = results[i];
+        const rawResult = results[i] || '[Processing failed]'; // Handle null results
+        const result = sanitizeCSVResponse(rawResult, headerColumns);
         const columns = parseCSVLine(originalLine);
-        const outputRow = arrayToCSVLine([...columns, result]);
+
+        while (columns.length < headerColumns.length) {
+          columns.push('');
+        }
+
+        let outputRow;
+        if (existingResponseIndex >= 0) {
+          columns[existingResponseIndex] = result;
+          outputRow = arrayToCSVLine(columns.slice(0, headerColumns.length));
+        } else {
+          outputRow = arrayToCSVLine([...columns, result]);
+        }
+
         csvLines.push(outputRow);
       }
       
@@ -1558,6 +1875,7 @@ app.post('/api/batch-process', async (req, res) => {
     // Prepare response
     const responseData = {
       success: true, 
+      batchId: currentBatchId,
       output: formattedOutput,
       fileName: `batch_result_${Date.now()}`,
       linesProcessed: allLines.length,
@@ -1578,6 +1896,11 @@ app.post('/api/batch-process', async (req, res) => {
     
   } catch (error) {
     console.error('Batch processing error:', error);
+
+    if (batchProgress.isProcessing) {
+      batchProgress.isProcessing = false;
+      batchProgress.estimatedTimeRemaining = 0;
+    }
     
     if (error.name === 'AbortError') {
       res.status(408).json({ error: 'Request timeout - API took too long to respond' });

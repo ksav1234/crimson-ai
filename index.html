@@ -3650,7 +3650,10 @@
         
         // Store batch processing start time
         const processingStartTime = Date.now();
+        const batchRequestId = `batch_${processingStartTime}_${Math.random().toString(36).slice(2, 8)}`;
         let progressInterval = null;
+        let elapsedInterval = null;
+        let isBatchRunning = true;
         
         try {
           const requestBody = {
@@ -3661,7 +3664,8 @@
             provider: selectedProvider,
             apiKey: apiKey,
             outputFormat: outputFormat,
-            systemPrompt: config.systemPrompt
+            systemPrompt: config.systemPrompt,
+            batchRequestId: batchRequestId
           };
           
           // Add custom API config if using a custom API
@@ -3678,34 +3682,51 @@
             };
           }
           
+          // Keep elapsed timer moving even if progress endpoint is delayed/stale.
+          elapsedInterval = setInterval(() => {
+            if (!isBatchRunning) return;
+            const elapsedSeconds = Math.floor((Date.now() - processingStartTime) / 1000);
+            document.getElementById('batchStatusText').textContent = `Processing file (${elapsedSeconds}s)...`;
+          }, 1000);
+
           // Start polling for real progress updates from server
           progressInterval = setInterval(async () => {
             try {
               const progressResponse = await fetch('/api/batch-progress');
               const progressData = await progressResponse.json();
-              
-              if (progressData.isProcessing) {
-                const elapsedSeconds = Math.floor((Date.now() - processingStartTime) / 1000);
-                const percentage = progressData.totalLines > 0 
-                  ? Math.floor((progressData.processedLines / progressData.totalLines) * 100) 
+
+              // Ignore progress from other/stale batch runs.
+              if (progressData && progressData.batchId && progressData.batchId !== batchRequestId) {
+                return;
+              }
+
+              const elapsedSeconds = Math.floor((Date.now() - processingStartTime) / 1000);
+              document.getElementById('batchStatusText').textContent = `Processing file (${elapsedSeconds}s)...`;
+
+              if (progressData && (progressData.isProcessing || progressData.totalLines > 0)) {
+                const safeTotal = Math.max(0, Number(progressData.totalLines) || 0);
+                const safeProcessed = Math.max(0, Math.min(Number(progressData.processedLines) || 0, safeTotal));
+                const safeEta = Math.max(0, Number(progressData.estimatedTimeRemaining) || 0);
+
+                const percentage = safeTotal > 0 
+                  ? Math.floor((safeProcessed / safeTotal) * 100) 
                   : 0;
                 
                 // Format ETA display
                 let etaDisplay = 'ETA: ';
-                if (progressData.estimatedTimeRemaining > 60) {
-                  const minutes = Math.floor(progressData.estimatedTimeRemaining / 60);
-                  const seconds = progressData.estimatedTimeRemaining % 60;
+                if (safeEta > 60) {
+                  const minutes = Math.floor(safeEta / 60);
+                  const seconds = safeEta % 60;
                   etaDisplay += `${minutes}m ${seconds}s`;
                 } else {
-                  etaDisplay += `${progressData.estimatedTimeRemaining}s`;
+                  etaDisplay += `${safeEta}s`;
                 }
                 
                 // Update UI elements with REAL server data
-                document.getElementById('batchStatusText').textContent = `Processing file (${elapsedSeconds}s)...`;
-                document.getElementById('batchProgressInfo').textContent = `${progressData.processedLines} / ${progressData.totalLines} lines`;
+                document.getElementById('batchProgressInfo').textContent = `${safeProcessed} / ${safeTotal} lines`;
                 document.getElementById('batchTimeInfo').textContent = etaDisplay;
                 document.getElementById('batchPercentage').textContent = `${percentage}%`;
-                document.getElementById('batchCurrentLine').textContent = `Line ${progressData.processedLines}`;
+                document.getElementById('batchCurrentLine').textContent = `Line ${safeProcessed}`;
                 document.getElementById('batchProgressBar').style.width = `${percentage}%`;
               }
             } catch (e) {
@@ -3719,8 +3740,10 @@
             body: JSON.stringify(requestBody)
           });
           
-          // Clear progress interval
+          // Clear intervals
+          isBatchRunning = false;
           if (progressInterval) clearInterval(progressInterval);
+          if (elapsedInterval) clearInterval(elapsedInterval);
           
           if (!response.ok) {
             const error = await response.json();
@@ -3773,7 +3796,9 @@
           
         } catch (error) {
           console.error('Batch processing error:', error);
+          isBatchRunning = false;
           if (progressInterval) clearInterval(progressInterval);
+          if (elapsedInterval) clearInterval(elapsedInterval);
           document.getElementById('batchStatus').style.display = 'none';
           document.getElementById('batchSetupForm').style.display = 'block';
           document.getElementById('batchProcessBtn').disabled = false;
