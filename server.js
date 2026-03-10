@@ -140,8 +140,8 @@ const upload = multer({
   }
 });
 
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+app.use(express.json({ limit: '250mb' }));
+app.use(express.urlencoded({ extended: true, limit: '250mb' }));
 
 // ============ HTML ROUTES ============
 
@@ -1333,8 +1333,13 @@ function enforceSystemPromptInCustomBody(requestBody, systemPrompt) {
 
 // Helper function to process single line through API with retry logic
 async function processLineWithAPI(line, prompt, provider, apiKey, systemPrompt, format, modelName, apiUrl, apiHeaders, lineIndex, rowContext = null, customApiConfig = null) {
-  const maxRetries = 2;
+  const maxRetries = 3; // Reliability profile for large file processing
   let lastError;
+  
+  // Debug: Log function call for first few lines
+  if (lineIndex <= 3) {
+    console.log(`[processLineWithAPI] Called for line ${lineIndex}, provider: ${provider}, format: ${format}`);
+  }
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -1405,18 +1410,22 @@ async function processLineWithAPI(line, prompt, provider, apiKey, systemPrompt, 
         requestBody.max_tokens = 4096;
         requestBody.temperature = 0.3;
       } else if (format === 'gemini') {
+        requestBody.generationConfig = requestBody.generationConfig || {};
         requestBody.generationConfig.maxOutputTokens = 4096;
         requestBody.generationConfig.temperature = 0.3;
       } else if (format === 'cohere') {
         requestBody.max_tokens = 4096;
         requestBody.temperature = 0.3;
       } else if (format === 'ollama') {
+        requestBody.options = requestBody.options || {};
         requestBody.options.num_predict = 4096;
         requestBody.options.temperature = 0.3;
       }
       
+      // Reliability timeout for slow API providers
+      const timeoutMs = 45000 + (attempt * 15000); // 45s, 60s, 75s, 90s
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout per line
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -1428,16 +1437,37 @@ async function processLineWithAPI(line, prompt, provider, apiKey, systemPrompt, 
       clearTimeout(timeoutId);
       
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`API error (attempt ${attempt + 1}): ${response.status} - ${errorText.substring(0, 100)}`);
+        const errorText = await response.text().catch(() => 'Unable to read error');
+        const errorPreview = errorText.substring(0, 200);
         
-        if (attempt < maxRetries && (response.status === 429 || response.status >= 500)) {
-          // Rate limited or server error, retry with shorter delay
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-          continue;
+        // Enhanced error logging
+        if (lineIndex <= 5 || attempt === maxRetries) {
+          console.error(`[API] Line ${lineIndex} error (attempt ${attempt + 1}):`, {
+            status: response.status,
+            statusText: response.statusText,
+            error: errorPreview
+          });
         }
         
-        throw new Error(`API error: ${response.status}`);
+        // Reliability retry logic with moderate backoff
+        if (attempt < maxRetries) {
+          // Retry on rate limit (429), server errors (5xx), or timeout (408, 504)
+          if (response.status === 429 || response.status >= 500 || response.status === 408 || response.status === 504) {
+            const backoffMs = Math.min(2000 * Math.pow(2, attempt), 12000); // 2s, 4s, 8s, max 12s
+            if (response.status === 429) {
+              console.warn(`[API] Rate limited on line ${lineIndex}, backing off ${backoffMs}ms`);
+            }
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            continue;
+          }
+          
+          // For 4xx errors other than 429, don't retry (client error)
+          if (response.status >= 400 && response.status < 500) {
+            throw new Error(`API client error ${response.status}: ${errorPreview}`);
+          }
+        }
+        
+        throw new Error(`API error ${response.status}: ${errorPreview}`);
       }
       
       const apiResponse = await response.json();
@@ -1470,56 +1500,181 @@ async function processLineWithAPI(line, prompt, provider, apiKey, systemPrompt, 
       // Clean response: remove JSON blocks, code blocks, and metadata
       const cleanedContent = cleanAPIResponse(extractedContent);
       
+      // Debug: Log completion for first few lines
+      if (lineIndex <= 3) {
+        console.log(`[processLineWithAPI] Completed line ${lineIndex}, response length: ${cleanedContent?.length || 0}`);
+      }
+      
       return cleanedContent || '[No response]';
       
     } catch (e) {
       lastError = e;
-      console.error(`Error processing line (attempt ${attempt + 1}/${maxRetries + 1}):`, e.message);
+      
+      // Categorize error type for better retry logic
+      const isNetworkError = e.name === 'AbortError' || e.message.includes('fetch') || e.message.includes('ECONNRESET');
+      const isTimeoutError = e.name === 'AbortError';
+      const isRateLimitError = e.message.includes('429');
+      
+      if (lineIndex <= 5 || attempt === maxRetries) {
+        console.error(`[API] Line ${lineIndex} exception (attempt ${attempt + 1}/${maxRetries + 1}):`, {
+          error: e.message,
+          type: isNetworkError ? 'network' : isTimeoutError ? 'timeout' : 'other'
+        });
+      }
       
       if (attempt < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+        // Retry network/timeout errors with reliability-focused backoff
+        if (isNetworkError || isTimeoutError || isRateLimitError) {
+          const backoffMs = Math.min(2000 * Math.pow(2, attempt), 10000);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          continue;
+        }
+        
+        // For other errors, keep a moderate retry delay
+        await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
+        continue;
       }
     }
   }
   
-  console.error(`Failed to process line after ${maxRetries + 1} attempts:`, lastError.message);
-  return '[Processing failed]';
+  // All retries exhausted
+  const errorMsg = lastError?.message || 'Unknown error';
+  console.error(`[API] Line ${lineIndex} failed after ${maxRetries + 1} attempts: ${errorMsg}`);
+  return `[Error: ${errorMsg.substring(0, 100)}]`;
 }
 
-// Global progress tracker for batch processing
-let batchProgress = {
-  batchId: null,
-  isProcessing: false,
-  totalLines: 0,
-  processedLines: 0,
-  successfulLines: 0,
-  startTime: 0,
-  estimatedTimeRemaining: 0
-};
+// Global progress tracker for batch processing - now using a Map to track multiple concurrent batches
+let batchProgressMap = new Map();
+
+// Initialize or get progress for a specific batch
+function initBatchProgress(batchId, totalLines) {
+  const progress = {
+    batchId: batchId,
+    isProcessing: true,
+    totalLines: totalLines,
+    processedLines: 0,
+    successfulLines: 0,
+    startTime: Date.now(),
+    estimatedTimeRemaining: 0
+  };
+  batchProgressMap.set(batchId, progress);
+  console.log(`[Progress] Initialized batch ${batchId}: ${totalLines} lines`);
+  return progress;
+}
+
+// Get progress for a specific batch, or the most recent one if batchId not found
+function getBatchProgress(batchId = null) {
+  if (batchId) {
+    if (batchProgressMap.has(batchId)) {
+      return batchProgressMap.get(batchId);
+    }
+
+    // Explicit batch lookup: if not found, return empty state for that batch.
+    // This avoids cross-batch progress jumps/resets from fallback behavior.
+    return {
+      batchId,
+      isProcessing: false,
+      totalLines: 0,
+      processedLines: 0,
+      successfulLines: 0,
+      startTime: 0,
+      estimatedTimeRemaining: 0
+    };
+  }
+
+  // No batchId requested: return most recent batch if available.
+  if (batchProgressMap.size > 0) {
+    const lastEntry = Array.from(batchProgressMap.entries()).pop();
+    return lastEntry[1];
+  }
+
+  // Return empty progress if no batches exist
+  return {
+    batchId: null,
+    isProcessing: false,
+    totalLines: 0,
+    processedLines: 0,
+    successfulLines: 0,
+    startTime: 0,
+    estimatedTimeRemaining: 0
+  };
+}
+
+// Update progress for a specific batch
+function updateBatchProgress(batchId, updates) {
+  if (!batchProgressMap.has(batchId)) {
+    return; // Batch doesn't exist, skip
+  }
+  
+  const progress = batchProgressMap.get(batchId);
+  Object.assign(progress, updates);
+  batchProgressMap.set(batchId, progress);
+}
+
+// Clean up old batch progress entries (keep last 10)
+function cleanupOldBatches() {
+  if (batchProgressMap.size > 10) {
+    const entries = Array.from(batchProgressMap.entries());
+    const toDelete = entries.slice(0, entries.length - 10);
+    toDelete.forEach(([batchId]) => {
+      console.log(`[Progress] Cleaning up old batch: ${batchId}`);
+      batchProgressMap.delete(batchId);
+    });
+  }
+}
 
 // Progress tracking endpoint
 app.get('/api/batch-progress', (req, res) => {
+  const batchId = req.query.batchId; // Get batchId from query param
+  const batchProgress = getBatchProgress(batchId);
+  
   const total = Math.max(0, Number(batchProgress.totalLines) || 0);
   const processed = Math.max(0, Math.min(Number(batchProgress.processedLines) || 0, total));
   const successful = Math.max(0, Math.min(Number(batchProgress.successfulLines) || 0, processed));
   const eta = Math.max(0, Number(batchProgress.estimatedTimeRemaining) || 0);
 
-  res.json({
+  const response = {
     ...batchProgress,
     totalLines: total,
     processedLines: processed,
     successfulLines: successful,
     estimatedTimeRemaining: eta
-  });
+  };
+  
+  // Debug log (limit to every 5 seconds to avoid spam)
+  const now = Date.now();
+  if (!app.locals.lastProgressLog || now - app.locals.lastProgressLog > 5000) {
+    console.log(`[Progress API] Batch ${batchId || '(default)'}: ${processed}/${total} lines, isProcessing: ${batchProgress.isProcessing}`);
+    app.locals.lastProgressLog = now;
+  }
+  
+  res.json(response);
 });
 
 // Batch processing endpoint - Line by line
-// Extended timeout middleware for large file processing (10 minutes)
+// Extended timeout middleware for large file processing (20 minutes to exceed client timeout)
 app.post('/api/batch-process', (req, res, next) => {
-  req.setTimeout(10 * 60 * 1000);  // 10 minutes for request
-  res.setTimeout(10 * 60 * 1000);  // 10 minutes for response
+  req.setTimeout(75 * 60 * 1000);  // 75 minutes for request
+  res.setTimeout(75 * 60 * 1000);  // 75 minutes for response
+  
+  // Add timeout handler
+  req.on('timeout', () => {
+    console.error('[Batch] Request timeout after 75 minutes');
+    if (!res.headersSent) {
+      res.status(408).json({ error: 'Request timeout - Processing took too long (max 75 minutes)' });
+    }
+  });
+  
+  res.on('timeout', () => {
+    console.error('[Batch] Response timeout after 75 minutes');
+    if (!res.headersSent) {
+      res.status(408).json({ error: 'Response timeout - Unable to send results (max 75 minutes)' });
+    }
+  });
+  
   next();
 }, async (req, res) => {
+  let currentBatchId = null;
   try {
     console.log('Batch process endpoint called');
     console.log('Request body keys:', req.body ? Object.keys(req.body) : 'req.body is undefined');
@@ -1661,11 +1816,9 @@ app.post('/api/batch-process', (req, res, next) => {
         return res.status(400).json({ error: 'Unsupported provider' });
     }
     
-    // Determine concurrent processing settings for optimal performance
-    // Concurrent requests = number of API calls to make simultaneously
-    // Batch size = how many lines to process before checking timeout
-    const concurrentRequests = 15; // Process 15 lines at a time for maximum speed
-    let batchSize = 2000; // With concurrent processing, we can use larger batches
+    // Reliability-first concurrency to avoid API timeouts/rate-limit spikes on large files
+    const concurrentRequests = 10;
+    let batchSize = 3000; // Larger batches for efficiency
     
     if (allLines.length < 100) {
       batchSize = allLines.length; // Process all at once for tiny files
@@ -1674,29 +1827,41 @@ app.post('/api/batch-process', (req, res, next) => {
     } else if (allLines.length < 1500) {
       batchSize = 1500;  // Medium files  
     } else {
-      batchSize = 2000;  // Large files (2000+ rows will use 2000 line batches)
+      batchSize = 3000;  // Large files - process in bigger chunks
     }
     
-    console.log(`Using concurrent processing: ${concurrentRequests} parallel requests, batch size: ${batchSize} lines for ${allLines.length} total lines`);
+    console.log(`Using RELIABLE concurrent processing: ${concurrentRequests} parallel requests, batch size: ${batchSize} lines for ${allLines.length} total lines`);
+    
+    // Validate file size before processing
+    const estimatedMemoryMB = (allLines.length * 5) / 1024; // Rough estimate: 5KB per line
+    if (estimatedMemoryMB > 500) {
+      console.warn(`[Batch] Large file detected: ~${estimatedMemoryMB.toFixed(0)}MB estimated memory usage`);
+    }
     
     // Process each line in adaptive batches to prevent timeout
     // Pre-allocate results array for concurrent processing
-    const results = new Array(allLines.length).fill(null);
+    let results;
+    try {
+      results = new Array(allLines.length).fill(null);
+    } catch (memError) {
+      console.error('[Batch] Failed to allocate results array:', memError);
+      return res.status(413).json({ 
+        error: `File too large: Cannot allocate memory for ${allLines.length} lines. Try processing a smaller file.`,
+        requestedLines: allLines.length
+      });
+    }
+    
     let successCount = 0;
     let completedCount = 0;
+    let consecutiveFailures = 0;
+    const maxConsecutiveFailures = 30; // Fail fast on sustained provider/network issues
     const startTime = Date.now();
-    const currentBatchId = batchRequestId || `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    currentBatchId = batchRequestId || `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     
-    // Initialize global progress tracker
-    batchProgress = {
-      batchId: currentBatchId,
-      isProcessing: true,
-      totalLines: allLines.length,
-      processedLines: 0,
-      successfulLines: 0,
-      startTime: startTime,
-      estimatedTimeRemaining: 0
-    };
+    // Initialize global progress tracker for this specific batch
+    initBatchProgress(currentBatchId, allLines.length);
+    
+    console.log(`[Batch] Initialized progress tracking with ID: ${currentBatchId}, Total lines: ${allLines.length}`);
     
     for (let batchStart = 0; batchStart < allLines.length; batchStart += batchSize) {
       const batchEnd = Math.min(batchStart + batchSize, allLines.length);
@@ -1704,10 +1869,31 @@ app.post('/api/batch-process', (req, res, next) => {
       
       console.log(`Processing batch: lines ${batchStart + 1}-${batchEnd} of ${allLines.length} (concurrent: ${concurrentRequests})`);
       
+      // Circuit breaker: Stop if too many consecutive failures (indicates systemic issue)
+      if (consecutiveFailures >= maxConsecutiveFailures) {
+        const errorMsg = `Circuit breaker triggered: ${consecutiveFailures} consecutive failures detected. Check API key, rate limits, or network connectivity.`;
+        console.error(`[Batch] ${errorMsg}`);
+        updateBatchProgress(currentBatchId, {
+          isProcessing: false,
+          estimatedTimeRemaining: 0
+        });
+        return res.status(429).json({ 
+          error: errorMsg,
+          linesProcessed: completedCount,
+          successfulLines: successCount,
+          consecutiveFailures: consecutiveFailures
+        });
+      }
+      
       // Process lines concurrently in chunks for better performance
       for (let chunkStart = 0; chunkStart < batchLines.length; chunkStart += concurrentRequests) {
         const chunkEnd = Math.min(chunkStart + concurrentRequests, batchLines.length);
         const concurrentChunk = batchLines.slice(chunkStart, chunkEnd);
+        
+        const absoluteChunkStart = batchStart + chunkStart;
+        if (absoluteChunkStart === 0 || absoluteChunkStart % 500 === 0) {
+          console.log(`[Batch] Processing chunk: lines ${absoluteChunkStart + 1}-${absoluteChunkStart + concurrentChunk.length}`);
+        }
         
         // Create array of promises for concurrent processing
         const promises = concurrentChunk.map(async (line, chunkIndex) => {
@@ -1745,15 +1931,24 @@ app.post('/api/batch-process', (req, res, next) => {
         // Wait for all concurrent requests to complete
         const chunkResults = await Promise.allSettled(promises);
         
-        // Process results and update progress
+        // Minimal logging - only log completion stats every 500 lines
+        if (completedCount % 500 === 0 || completedCount < 30) {
+          console.log(`[Batch] Chunk completed: ${chunkResults.filter(r => r.status === 'fulfilled').length}/${chunkResults.length} succeeded`);
+        }
         for (const promiseResult of chunkResults) {
           if (promiseResult.status === 'fulfilled') {
             const { index, result } = promiseResult.value;
             results[index] = result;
             completedCount++;
             
-            if (!result.includes('[') && result.length > 0) {
+            // Check if result is valid (not an error message)
+            const isSuccess = result && !result.startsWith('[Error:') && !result.includes('[Processing failed]') && result.length > 0;
+            
+            if (isSuccess) {
               successCount++;
+              consecutiveFailures = 0; // Reset on success
+            } else {
+              consecutiveFailures++;
             }
             
             // Update global progress tracker
@@ -1763,118 +1958,174 @@ app.post('/api/batch-process', (req, res, next) => {
             const remainingLines = allLines.length - processedSoFar;
             const estimatedTimeRemaining = Math.ceil(timePerLine * remainingLines / 1000);
 
-            if (batchProgress.batchId === currentBatchId) {
-              batchProgress.processedLines = Math.min(processedSoFar, allLines.length);
-              batchProgress.successfulLines = Math.min(successCount, batchProgress.processedLines);
-              batchProgress.estimatedTimeRemaining = Math.max(0, estimatedTimeRemaining);
+            updateBatchProgress(currentBatchId, {
+              processedLines: Math.min(processedSoFar, allLines.length),
+              successfulLines: Math.min(successCount, processedSoFar),
+              estimatedTimeRemaining: Math.max(0, estimatedTimeRemaining)
+            });
+
+            // Debug log every 100 lines to reduce I/O overhead
+            if (processedSoFar <= 30 || processedSoFar % 100 === 0) {
+              const linesPerSecond = (processedSoFar / (elapsedTime / 1000)).toFixed(2);
+              const projectedTotal = (allLines.length / linesPerSecond / 60).toFixed(1);
+              console.log(`[Batch] ${processedSoFar}/${allLines.length} (${Math.round(processedSoFar/allLines.length*100)}%) | Speed: ${linesPerSecond} lines/s | Projected: ${projectedTotal} min | Success: ${successCount}`);
             }
             
-            // Log progress every 25 lines
-            if (processedSoFar % 25 === 0) {
+            // Log progress summary every 500 lines
+            if (processedSoFar % 500 === 0) {
               console.log(`Processed ${processedSoFar}/${allLines.length} lines - ETA: ~${estimatedTimeRemaining}s (${Math.round(processedSoFar/allLines.length*100)}%)`);
             }
           } else {
             completedCount++;
+            consecutiveFailures++;
             console.error('Promise rejected:', promiseResult.reason);
 
-            if (batchProgress.batchId === currentBatchId) {
-              const elapsedTime = Date.now() - startTime;
-              const processedSoFar = completedCount;
-              const timePerLine = elapsedTime / Math.max(processedSoFar, 1);
-              const remainingLines = allLines.length - processedSoFar;
-              const estimatedTimeRemaining = Math.ceil(timePerLine * remainingLines / 1000);
+            const elapsedTime = Date.now() - startTime;
+            const processedSoFar = completedCount;
+            const timePerLine = elapsedTime / Math.max(processedSoFar, 1);
+            const remainingLines = allLines.length - processedSoFar;
+            const estimatedTimeRemaining = Math.ceil(timePerLine * remainingLines / 1000);
 
-              batchProgress.processedLines = Math.min(processedSoFar, allLines.length);
-              batchProgress.successfulLines = Math.min(successCount, batchProgress.processedLines);
-              batchProgress.estimatedTimeRemaining = Math.max(0, estimatedTimeRemaining);
-            }
+            updateBatchProgress(currentBatchId, {
+              processedLines: Math.min(processedSoFar, allLines.length),
+              successfulLines: Math.min(successCount, processedSoFar),
+              estimatedTimeRemaining: Math.max(0, estimatedTimeRemaining)
+            });
           }
         }
         
-        // Small delay between concurrent chunks to avoid rate limiting
-        if (chunkEnd < batchLines.length) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
+        // No delay between chunks for maximum speed
+        // Rate limiting handled by individual request retries
       }
     }
     
     const totalElapsedTime = Date.now() - startTime;
-    console.log(`Batch processing completed: ${successCount}/${allLines.length} lines successfully processed in ${totalElapsedTime}ms`);
+    const failedCount = completedCount - successCount;
+    const successRate = completedCount > 0 ? ((successCount / completedCount) * 100).toFixed(1) : 0;
+    const elapsedMinutes = (totalElapsedTime / 1000 / 60).toFixed(2);
+    const linesPerMinute = (completedCount / (totalElapsedTime / 1000 / 60)).toFixed(1);
     
-    // Mark processing as complete
-    if (batchProgress.batchId === currentBatchId) {
-      batchProgress.isProcessing = false;
-      batchProgress.processedLines = allLines.length;
-      batchProgress.successfulLines = Math.min(successCount, allLines.length);
-      batchProgress.estimatedTimeRemaining = 0;
+    console.log(`[Batch] ✓ Processing completed:`, {
+      total: allLines.length,
+      successful: successCount,
+      failed: failedCount,
+      successRate: `${successRate}%`,
+      duration: `${elapsedMinutes} minutes`,
+      speed: `${linesPerMinute} lines/min`,
+      avgPerLine: `${(totalElapsedTime / completedCount).toFixed(0)}ms`
+    });
+    
+    // Performance check: warn if too slow for large batches
+    const targetLinesPerMinute = 42; // 2500 lines in 60 min
+    if (allLines.length >= 1000 && parseFloat(linesPerMinute) < targetLinesPerMinute) {
+      console.warn(`[Batch] ⚠️  Performance below target: ${linesPerMinute} lines/min (target: ${targetLinesPerMinute} lines/min for 2500 lines in 60 min)`);
     }
     
-    // Format output based on file type
+    // Mark processing as complete
+    updateBatchProgress(currentBatchId, {
+      isProcessing: false,
+      processedLines: allLines.length,
+      successfulLines: Math.min(successCount, allLines.length),
+      estimatedTimeRemaining: 0
+    });
+    
+    // Cleanup old batches
+    cleanupOldBatches();
+    
+    console.log(`[Batch] Starting output assembly for ${allLines.length} lines`);
+    updateBatchProgress(currentBatchId, {
+      isProcessing: true,
+      processedLines: allLines.length,
+      successfulLines: successCount,
+      estimatedTimeRemaining: 0
+    });
+    
+    // Format output based on file type with memory-efficient string building
     let formattedOutput = '';
     
-    if ((fileType === '.csv' || outputFormat === 'csv') && headerLine) {
-      // Build CSV with output column
-      const csvLines = [];
-      const existingResponseIndex = headerColumns.findIndex(col => {
-        const key = String(col || '').trim().toLowerCase();
-        return key === 'response' || key === 'ai_response';
-      });
+    try {
+      if ((fileType === '.csv' || outputFormat === 'csv') && headerLine) {
+        // Build CSV with output column using memory-efficient approach
+        const existingResponseIndex = headerColumns.findIndex(col => {
+          const key = String(col || '').trim().toLowerCase();
+          return key === 'response' || key === 'ai_response';
+        });
 
-      const outputHeader = existingResponseIndex >= 0
-        ? arrayToCSVLine(headerColumns)
-        : arrayToCSVLine([...headerColumns, 'AI_Response']);
-      csvLines.push(outputHeader);
-      
-      for (let i = 0; i < results.length; i++) {
-        const originalLine = allLines[i];
-        const rawResult = results[i] || '[Processing failed]'; // Handle null results
-        const result = sanitizeCSVResponse(rawResult, headerColumns);
-        const columns = parseCSVLine(originalLine);
+        const outputHeader = existingResponseIndex >= 0
+          ? arrayToCSVLine(headerColumns)
+          : arrayToCSVLine([...headerColumns, 'AI_Response']);
+        
+        // For large files, build output in chunks to avoid memory spikes
+        const chunkSize = 500;
+        const chunks = [];
+        chunks.push(outputHeader);
+        
+        for (let i = 0; i < results.length; i++) {
+          const originalLine = allLines[i];
+          const rawResult = results[i] || '[Processing failed]';
+          const result = sanitizeCSVResponse(rawResult, headerColumns);
+          const columns = parseCSVLine(originalLine);
 
-        while (columns.length < headerColumns.length) {
-          columns.push('');
+          while (columns.length < headerColumns.length) {
+            columns.push('');
+          }
+
+          let outputRow;
+          if (existingResponseIndex >= 0) {
+            columns[existingResponseIndex] = result;
+            outputRow = arrayToCSVLine(columns.slice(0, headerColumns.length));
+          } else {
+            outputRow = arrayToCSVLine([...columns, result]);
+          }
+
+          chunks.push(outputRow);
+          
+          if (i % 1000 === 0 && i > 0) {
+            console.log(`[Batch] Assembled ${i + 1}/${results.length} output rows`);
+          }
         }
-
-        let outputRow;
-        if (existingResponseIndex >= 0) {
-          columns[existingResponseIndex] = result;
-          outputRow = arrayToCSVLine(columns.slice(0, headerColumns.length));
-        } else {
-          outputRow = arrayToCSVLine([...columns, result]);
+        
+        console.log(`[Batch] Joining ${chunks.length} CSV lines into final output`);
+        formattedOutput = chunks.join('\n');
+        chunks.length = 0; // Clear array to free memory
+        
+      } else if (fileType === '.txt' || outputFormat === 'txt') {
+        // Build text output with original + result
+        const textLines = [];
+        for (let i = 0; i < results.length; i++) {
+          textLines.push(`Line ${i + 1} Input:\n${allLines[i]}`);
+          textLines.push(`Line ${i + 1} Output:\n${results[i]}`);
+          textLines.push('---');
+          
+          if (i % 500 === 0 && i > 0) {
+            console.log(`[Batch] Assembled ${i}/${results.length} text lines`);
+          }
         }
-
-        csvLines.push(outputRow);
+        console.log(`[Batch] Joining text output`);
+        formattedOutput = textLines.join('\n');
+        
+      } else if (outputFormat === 'json') {
+        console.log(`[Batch] Building JSON output for ${results.length} results`);
+        const jsonData = {
+          summary: {
+            totalLines: lines.length,
+            processedLines: allLines.length,
+            successfulLines: successCount,
+            provider: provider,
+            fileName: fileName,
+            timestamp: new Date().toISOString()
+          },
+          data: results.map((result, idx) => ({
+            lineNumber: idx + 1,
+            input: allLines[idx],
+            output: result
+          }))
+        };
+        formattedOutput = JSON.stringify(jsonData, null, 2);
       }
-      
-      formattedOutput = csvLines.join('\n');
-      
-    } else if (fileType === '.txt' || outputFormat === 'txt') {
-      // Build text output with original + result
-      const textLines = [];
-      for (let i = 0; i < results.length; i++) {
-        textLines.push(`Line ${i + 1} Input:\n${allLines[i]}`);
-        textLines.push(`Line ${i + 1} Output:\n${results[i]}`);
-        textLines.push('---');
-      }
-      formattedOutput = textLines.join('\n');
-      
-    } else if (outputFormat === 'json') {
-      const jsonData = {
-        summary: {
-          totalLines: lines.length,
-          processedLines: allLines.length,
-          successfulLines: successCount,
-          provider: provider,
-          fileName: fileName,
-          timestamp: new Date().toISOString()
-        },
-        data: results.map((result, idx) => ({
-          lineNumber: idx + 1,
-          input: allLines[idx],
-          output: result
-        }))
-      };
-      formattedOutput = JSON.stringify(jsonData, null, 2);
+    } catch (outputError) {
+      console.error('[Batch] Error during output assembly:', outputError);
+      throw new Error(`Failed to assemble output: ${outputError.message}. File may be too large.`);
     }
     
     // Prepare response
@@ -1891,20 +2142,57 @@ app.post('/api/batch-process', (req, res, next) => {
       timestamp: new Date().toISOString()
     };
     
-    console.log('Sending response:', {
-      success: responseData.success,
-      linesProcessed: responseData.linesProcessed,
-      successfulLines: responseData.successfulLines
+    const outputSizeKB = Math.round(formattedOutput.length / 1024);
+    const outputSizeMB = (outputSizeKB / 1024).toFixed(2);
+    
+    console.log('[Batch] Output assembled successfully:', {
+      linesProcessed: allLines.length,
+      successfulLines: successCount,
+      outputSizeKB: outputSizeKB,
+      outputSizeMB: outputSizeMB,
+      batchId: currentBatchId
     });
     
-    res.json(responseData);
+    // Validate output size before sending
+    const maxSizeMB = 90; // Keep under 100MB JSON limit
+    if (outputSizeKB > maxSizeMB * 1024) {
+      const error = `Output too large: ${outputSizeMB}MB exceeds ${maxSizeMB}MB limit. Try processing fewer lines or use a more compact output format.`;
+      console.error(`[Batch] ${error}`);
+      updateBatchProgress(currentBatchId, {
+        isProcessing: false,
+        estimatedTimeRemaining: 0
+      });
+      return res.status(413).json({ 
+        error: error,
+        linesProcessed: allLines.length,
+        outputSizeMB: parseFloat(outputSizeMB)
+      });
+    }
+    
+    if (outputSizeKB > 50000) {
+      console.warn(`[Batch] Large response: ${outputSizeMB}MB - sending may take time`);
+    }
+    
+    try {
+      console.log(`[Batch] Sending ${outputSizeMB}MB response for batch ${currentBatchId}`);
+      res.json(responseData);
+      console.log(`[Batch] ✓ Response sent successfully for batch ${currentBatchId}`);
+    } catch (sendError) {
+      console.error('[Batch] Error sending response:', sendError);
+      console.error('[Batch] Send error stack:', sendError.stack);
+      throw sendError;
+    }
     
   } catch (error) {
-    console.error('Batch processing error:', error);
+    console.error('[Batch] Processing error:', error);
+    console.error('[Batch] Error stack:', error.stack);
 
-    if (batchProgress.isProcessing) {
-      batchProgress.isProcessing = false;
-      batchProgress.estimatedTimeRemaining = 0;
+    // Mark processing as failed for this batch
+    if (currentBatchId) {
+      updateBatchProgress(currentBatchId, {
+        isProcessing: false,
+        estimatedTimeRemaining: 0
+      });
     }
     
     if (error.name === 'AbortError') {

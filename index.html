@@ -1935,8 +1935,9 @@
               <div id="batchProgress" style="background: rgba(0,0,0,0.5); height: 8px; border-radius: 4px; overflow: hidden;">
                 <div id="batchProgressBar" style="height: 100%; background: linear-gradient(90deg, var(--accent-red), var(--accent-orange)); width: 0%; transition: width 0.3s;"></div>
               </div>
-              <div style="margin-top: 6px; font-size: 12px; color: rgba(255,255,255,0.6);">
-                <span id="batchPercentage">0%</span> | <span id="batchCurrentLine">Line 0</span>
+              <div style="margin-top: 6px; font-size: 12px; color: rgba(255,255,255,0.6); display: flex; justify-content: space-between;">
+                <span><span id="batchPercentage">0%</span> | <span id="batchCurrentLine">Line 0</span></span>
+                <span id="batchSpeed" style="color: rgba(255,255,255,0.5);"></span>
               </div>
             </div>
           </div>
@@ -3654,6 +3655,9 @@
         let progressInterval = null;
         let elapsedInterval = null;
         let isBatchRunning = true;
+        let progressPollInFlight = false;
+        let lastDisplayedProcessed = 0;
+        let lastDisplayedTotal = 0;
         
         try {
           const requestBody = {
@@ -3687,15 +3691,30 @@
             if (!isBatchRunning) return;
             const elapsedSeconds = Math.floor((Date.now() - processingStartTime) / 1000);
             document.getElementById('batchStatusText').textContent = `Processing file (${elapsedSeconds}s)...`;
-          }, 1000);
+          }, 1000); // Update elapsed time every second
 
-          // Start polling for real progress updates from server
+          // Start polling for real progress updates from server (faster polling for better UX)
           progressInterval = setInterval(async () => {
+            if (progressPollInFlight) return;
+            progressPollInFlight = true;
+
             try {
-              const progressResponse = await fetch('/api/batch-progress');
+              const progressController = new AbortController();
+              const progressTimeout = setTimeout(() => progressController.abort(), 4000);
+
+              // Pass batchRequestId as query param so server returns the correct batch's progress
+              const progressResponse = await fetch(`/api/batch-progress?batchId=${encodeURIComponent(batchRequestId)}`, {
+                signal: progressController.signal
+              });
+              clearTimeout(progressTimeout);
+
+              if (!progressResponse.ok) {
+                return;
+              }
+
               const progressData = await progressResponse.json();
 
-              // Ignore progress from other/stale batch runs.
+              // Ignore foreign batch updates completely.
               if (progressData && progressData.batchId && progressData.batchId !== batchRequestId) {
                 return;
               }
@@ -3705,40 +3724,114 @@
 
               if (progressData && (progressData.isProcessing || progressData.totalLines > 0)) {
                 const safeTotal = Math.max(0, Number(progressData.totalLines) || 0);
-                const safeProcessed = Math.max(0, Math.min(Number(progressData.processedLines) || 0, safeTotal));
+                const serverProcessed = Math.max(0, Math.min(Number(progressData.processedLines) || 0, safeTotal));
                 const safeEta = Math.max(0, Number(progressData.estimatedTimeRemaining) || 0);
 
-                const percentage = safeTotal > 0 
-                  ? Math.floor((safeProcessed / safeTotal) * 100) 
-                  : 0;
+                // Keep progress stable and non-decreasing for this batch.
+                if (safeTotal > 0) {
+                  lastDisplayedTotal = Math.max(lastDisplayedTotal, safeTotal);
+                }
+                const effectiveTotal = lastDisplayedTotal || safeTotal;
+                const safeProcessed = Math.min(
+                  Math.max(lastDisplayedProcessed, serverProcessed),
+                  Math.max(effectiveTotal, 0)
+                );
+                lastDisplayedProcessed = safeProcessed;
+
+                // Calculate percentage with proper rounding and clamping
+                let percentage = 0;
+                let percentageDisplay = '0%';
+                
+                if (effectiveTotal > 0) {
+                  const rawPercentage = (safeProcessed / effectiveTotal) * 100;
+                  
+                  // For large files (>500 lines), show one decimal place for better visual feedback
+                  if (effectiveTotal > 500) {
+                    percentage = Math.min(100, Math.round(rawPercentage * 10) / 10); // Round to 1 decimal
+                    percentageDisplay = `${percentage.toFixed(1)}%`;
+                  } else {
+                    percentage = Math.min(100, Math.round(rawPercentage)); // Round to nearest integer
+                    percentageDisplay = percentage + '%';
+                  }
+                }
                 
                 // Format ETA display
                 let etaDisplay = 'ETA: ';
-                if (safeEta > 60) {
+                const isCompletedByRows = effectiveTotal > 0 && safeProcessed >= effectiveTotal;
+
+                if (isCompletedByRows) {
+                  etaDisplay += '0s';
+                } else if (safeEta > 60) {
                   const minutes = Math.floor(safeEta / 60);
                   const seconds = safeEta % 60;
                   etaDisplay += `${minutes}m ${seconds}s`;
-                } else {
+                } else if (safeEta > 0) {
                   etaDisplay += `${safeEta}s`;
+                } else {
+                  etaDisplay += 'calculating...';
                 }
                 
                 // Update UI elements with REAL server data
-                document.getElementById('batchProgressInfo').textContent = `${safeProcessed} / ${safeTotal} lines`;
+                document.getElementById('batchProgressInfo').textContent = `${safeProcessed} / ${effectiveTotal} lines`;
                 document.getElementById('batchTimeInfo').textContent = etaDisplay;
-                document.getElementById('batchPercentage').textContent = `${percentage}%`;
+                document.getElementById('batchPercentage').textContent = percentageDisplay;
                 document.getElementById('batchCurrentLine').textContent = `Line ${safeProcessed}`;
-                document.getElementById('batchProgressBar').style.width = `${percentage}%`;
+                document.getElementById('batchProgressBar').style.width = `${Math.min(100, percentage)}%`;
+                
+                // Calculate and display processing speed
+                if (safeProcessed > 0 && elapsedSeconds > 0) {
+                  const linesPerSecond = (safeProcessed / elapsedSeconds).toFixed(2);
+                  const linesPerMinute = (safeProcessed / (elapsedSeconds / 60)).toFixed(1);
+                  const projectedTotalMinutes = effectiveTotal > 0 ? (effectiveTotal / safeProcessed * (elapsedSeconds / 60)).toFixed(1) : 0;
+                  
+                  // Target: 2500 lines in 60 min = ~42 lines/min
+                  const targetSpeed = 42;
+                  const speedStatus = parseFloat(linesPerMinute) >= targetSpeed ? '✓' : '⚠';
+                  const speedColor = parseFloat(linesPerMinute) >= targetSpeed ? 'rgba(46, 204, 113, 0.8)' : 'rgba(231, 76, 60, 0.8)';
+                  
+                  const speedElement = document.getElementById('batchSpeed');
+                  speedElement.textContent = `${speedStatus} ${linesPerMinute} lines/min`;
+                  speedElement.style.color = speedColor;
+                  
+                  // Update status text with projected total time
+                  if (effectiveTotal > 500 && !isCompletedByRows) {
+                    document.getElementById('batchStatusText').textContent = `Processing (${elapsedSeconds}s) • Projected: ${projectedTotalMinutes} min`;
+                  }
+                }
+
+                if (isCompletedByRows) {
+                  document.getElementById('batchStatusText').textContent = 'Finalizing output...';
+                }
               }
             } catch (e) {
-              console.error('Error fetching progress:', e);
+              if (e.name !== 'AbortError') {
+                console.error('Error fetching progress:', e);
+              }
+            } finally {
+              progressPollInFlight = false;
             }
           }, 500); // Poll every 500ms for smooth updates
           
-          const response = await fetch('/api/batch-process', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody)
-          });
+          let response;
+          try {
+            response = await fetch('/api/batch-process', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(requestBody),
+              keepalive: false // Disable keepalive to allow long requests
+            });
+          } catch (fetchError) {
+            // Clear intervals
+            isBatchRunning = false;
+            if (progressInterval) clearInterval(progressInterval);
+            if (elapsedInterval) clearInterval(elapsedInterval);
+            
+            // Handle different fetch errors
+            if (fetchError.message === 'Failed to fetch') {
+              throw new Error('Network or proxy connection dropped during long processing. Please retry.');
+            }
+            throw new Error(`Request failed: ${fetchError.message}`);
+          }
           
           // Clear intervals
           isBatchRunning = false;
@@ -3754,7 +3847,7 @@
                 const error = await response.json();
                 errorMessage = error.error || 'Batch processing failed';
               } else if (response.status === 408) {
-                errorMessage = 'Request timeout: File processing took too long (max 10 minutes)';
+                errorMessage = 'Request timeout: File processing took too long (max 75 minutes)';
               } else if (response.status === 413) {
                 errorMessage = 'File too large: Request body exceeded size limit. Try splitting into smaller files.';
               } else {
